@@ -2,28 +2,25 @@ import os
 import requests
 import datetime
 
-# --- جلب التوكن و ID من Secrets ---
-TELEGRAM_TOKEN   = os.getenv("8376047382:AAEGZxhQuSuqLWIIC240pWgpWOL_Vm0IINs")
-TELEGRAM_CHAT_ID = os.getenv("-1002960432716")
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+GOLD_API_KEY     = os.getenv("GOLD_API_KEY")  # ضع مفتاحك هنا كـ Secret
 
-# --- ثوابت ---
 TROY_OUNCE_TO_GRAM = 31.1034768
 
 def get_spot_xau_usd():
-    """جلب سعر الذهب (الأونصة) بالدولار من Yahoo Finance"""
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F"
-    r = requests.get(url, timeout=20)
+    url = "https://www.goldapi.io/api/XAU/USD"
+    headers = {"x-access-token": GOLD_API_KEY, "Content-Type": "application/json"}
+    r = requests.get(url, headers=headers, timeout=20)
     r.raise_for_status()
     data = r.json()
-    return data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+    return float(data["price"])
 
 def get_usd_to_iqd():
-    """جلب سعر صرف الدولار إلى الدينار العراقي"""
     url = "https://api.exchangerate.host/latest?base=USD&symbols=IQD"
     r = requests.get(url, timeout=20)
     r.raise_for_status()
-    data = r.json()
-    return float(data["rates"]["IQD"])
+    return float(r.json()["rates"]["IQD"])
 
 def format_prices(ounce_usd, usd_to_iqd):
     gram_usd_24 = ounce_usd / TROY_OUNCE_TO_GRAM
@@ -39,20 +36,13 @@ def format_prices(ounce_usd, usd_to_iqd):
         return f"{x:,.{nd}f}"
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-
     text = (
-        f"🟡 أسعار الذهب الفوري — {now}\n"
-        f"— — — — — — — — — —\n"
-        f"الأونصة:\n"
-        f"• {fmt(ounce_usd,2)} $/oz\n"
-        f"• {fmt(ounce_iqd,0)} د.ع/oz\n\n"
-        f"الغرام:\n"
-        f"• 24K: {fmt(gram_usd_24,2)} $ — {fmt(gram_iqd_24,0)} د.ع\n"
-        f"• 21K: {fmt(gram_usd_21,2)} $ — {fmt(gram_iqd_21,0)} د.ع\n"
-        f"• 18K: {fmt(gram_usd_18,2)} $ — {fmt(gram_iqd_18,0)} د.ع\n"
-        f"— — — — — — — — — —\n"
-        f"⚙️ مصدر: Yahoo Finance + exchangerate.host\n"
-        f"🔁 تحديث تلقائي كل ساعة"
+        f"🟡 أسعار الذهب الفوري — {now}\\n"
+        f"الأونصة: {fmt(ounce_usd,2)} $ — {fmt(ounce_iqd,0)} د.ع\\n"
+        f"الغرام: 24K {fmt(gram_usd_24,2)} $ — {fmt(gram_iqd_24,0)} د.ع\\n"
+        f"21K {fmt(gram_usd_21,2)} $ — {fmt(gram_iqd_21,0)} د.ع\\n"
+        f"18K {fmt(gram_usd_18,2)} $ — {fmt(gram_iqd_18,0)} د.ع\\n"
+        f"⚙️ مصدر: GoldAPI + exchangerate.host"
     )
     return text
 
