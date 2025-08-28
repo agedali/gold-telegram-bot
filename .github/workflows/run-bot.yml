@@ -21,7 +21,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run bot
+              - name: Run bot
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOLD_API_KEY: ${{ secrets.GOLD_API_KEY }}
         run: python gold_bot.py
