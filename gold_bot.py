@@ -3,8 +3,8 @@ import requests
 import datetime
 
 # --- جلب التوكن و ID من Secrets ---
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN   = os.getenv("8376047382:AAEGZxhQuSuqLWIIC240pWgpWOL_Vm0IINs")
+TELEGRAM_CHAT_ID = os.getenv("-1002960432716")
 
 # --- ثوابت ---
 TROY_OUNCE_TO_GRAM = 31.1034768
