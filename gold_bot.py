@@ -2,47 +2,52 @@ import os
 import requests
 import datetime
 
+# من Secrets في GitHub
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-GOLD_API_KEY     = os.getenv("GOLD_API_KEY")  # ضع مفتاحك هنا كـ Secret
+GOLDPRICEZ_KEY   = os.getenv("GOLDPRICEZ_API_KEY")
+ALANCHAND_KEY    = os.getenv("ALANCHAND_API_KEY")
 
-TROY_OUNCE_TO_GRAM = 31.1034768
-
-def get_spot_xau_usd():
-    url = "https://www.goldapi.io/api/XAU/USD"
-    headers = {"x-access-token": GOLD_API_KEY, "Content-Type": "application/json"}
+def get_usd_to_iqd():
+    url = "https://api.alanchand.com?type=currency&symbols=usd"
+    headers = {"Authorization": f"Bearer {ALANCHAND_KEY}"}
     r = requests.get(url, headers=headers, timeout=20)
     r.raise_for_status()
     data = r.json()
-    return float(data["price"])
+    return float(data["data"]["usd"]["iqd"])
 
-def get_usd_to_iqd():
-    url = "https://api.exchangerate.host/latest?base=USD&symbols=IQD"
-    r = requests.get(url, timeout=20)
+def get_gold_prices_usd():
+    url = "https://goldpricez.com/api/rates/currency/usd/measure/all"
+    headers = {"X-API-KEY": GOLDPRICEZ_KEY}
+    r = requests.get(url, headers=headers, timeout=20)
     r.raise_for_status()
-    return float(r.json()["rates"]["IQD"])
+    return r.json()
 
-def format_prices(ounce_usd, usd_to_iqd):
-    gram_usd_24 = ounce_usd / TROY_OUNCE_TO_GRAM
-    gram_usd_21 = gram_usd_24 * (21/24)
-    gram_usd_18 = gram_usd_24 * (18/24)
+def format_message(usd_to_iqd, gold_data):
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    ounce_usd = gold_data["gold_per_ounce"]
+    g24_usd   = gold_data["gold_per_gram_24k"]
+    g21_usd   = gold_data["gold_per_gram_21k"]
+    g18_usd   = gold_data["gold_per_gram_18k"]
 
     ounce_iqd = ounce_usd * usd_to_iqd
-    gram_iqd_24 = gram_usd_24 * usd_to_iqd
-    gram_iqd_21 = gram_usd_21 * usd_to_iqd
-    gram_iqd_18 = gram_usd_18 * usd_to_iqd
+    g24_iqd   = g24_usd * usd_to_iqd
+    g21_iqd   = g21_usd * usd_to_iqd
+    g18_iqd   = g18_usd * usd_to_iqd
 
     def fmt(x, nd=2):
         return f"{x:,.{nd}f}"
 
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     text = (
-        f"🟡 أسعار الذهب الفوري — {now}\\n"
-        f"الأونصة: {fmt(ounce_usd,2)} $ — {fmt(ounce_iqd,0)} د.ع\\n"
-        f"الغرام: 24K {fmt(gram_usd_24,2)} $ — {fmt(gram_iqd_24,0)} د.ع\\n"
-        f"21K {fmt(gram_usd_21,2)} $ — {fmt(gram_iqd_21,0)} د.ع\\n"
-        f"18K {fmt(gram_usd_18,2)} $ — {fmt(gram_iqd_18,0)} د.ع\\n"
-        f"⚙️ مصدر: GoldAPI + exchangerate.host"
+        f"📊 التحديث: {now}\n\n"
+        f"💵 سعر الصرف\n"
+        f"1 دولار = {fmt(usd_to_iqd,0)} د.ع\n\n"
+        f"🏅 أسعار الذهب\n"
+        f"🟡 الأونصة: {fmt(ounce_usd,2)} $ — {fmt(ounce_iqd,0)} د.ع\n"
+        f"🥇 24K: {fmt(g24_usd,2)} $ — {fmt(g24_iqd,0)} د.ع\n"
+        f"🥈 21K: {fmt(g21_usd,2)} $ — {fmt(g21_iqd,0)} د.ع\n"
+        f"🥉 18K: {fmt(g18_usd,2)} $ — {fmt(g18_iqd,0)} د.ع"
     )
     return text
 
@@ -54,9 +59,9 @@ def send_to_telegram(text):
     return r.json()
 
 def main():
-    ounce_usd = get_spot_xau_usd()
     usd_to_iqd = get_usd_to_iqd()
-    msg = format_prices(ounce_usd, usd_to_iqd)
+    gold_data  = get_gold_prices_usd()
+    msg = format_message(usd_to_iqd, gold_data)
     send_to_telegram(msg)
 
 if __name__ == "__main__":
