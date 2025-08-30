@@ -6,12 +6,12 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOLDPRICEZ_API_KEY = os.getenv("GOLDPRICEZ_API_KEY")
 
 def get_spot_xau_usd():
-    url = f"https://goldpricez.com/api/rates/currency/usd/measure/all?api_key={GOLDPRICEZ_API_KEY}"
-    r = requests.get(url)
+    url = "https://goldpricez.com/api/rates/currency/usd/measure/all"
+    headers = {"X-API-KEY": GOLDPRICEZ_API_KEY}
+    r = requests.get(url, headers=headers)
     r.raise_for_status()
     data = r.json()
-    # السعر للأونصة بالدولار
-    return float(data["ounce"])
+    return float(data["ounce"])   # أونصة بالدولار
 
 def send_to_telegram(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
