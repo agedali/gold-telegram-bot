@@ -1,14 +1,14 @@
 import logging
 import os
 import random
+import asyncio
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# إعداد اللوج
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 BASE_PRICES = {
     "ounce_usd": 1950.50,
@@ -35,27 +35,27 @@ def format_price_message(prices: dict):
     return message
 
 # -----------------------------
-# أمر /start لإرسال الزر
 async def start(update, context):
     keyboard = [[InlineKeyboardButton("💵 تحديث سعر الذهب", callback_data="get_price")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("مرحبًا! اضغط الزر للحصول على سعر الذهب الحالي:", reply_markup=reply_markup)
 
 # -----------------------------
-# الرد على ضغط الزر
 async def button_callback(update, context):
     query = update.callback_query
-    await query.answer()  # يجب الرد على الضغط
+    await query.answer()
     prices = generate_fake_prices()
     message = format_price_message(prices)
     await query.edit_message_text(text=message, parse_mode="Markdown")
 
 # -----------------------------
-# إرسال تحديث تلقائي كل ساعتين للقناة
-async def send_periodic_updates(context: ContextTypes.DEFAULT_TYPE):
-    prices = generate_fake_prices()
-    message = format_price_message(prices)
-    await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+async def periodic_updates(app):
+    while True:
+        prices = generate_fake_prices()
+        message = format_price_message(prices)
+        await app.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+        logging.info("📩 تم إرسال تحديث تلقائي للقناة")
+        await asyncio.sleep(7200)  # كل ساعتين
 
 # -----------------------------
 def main():
@@ -64,10 +64,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="get_price"))
 
-    # تفعيل إرسال التحديث كل ساعتين (7200 ثانية)
-    app.job_queue.run_repeating(send_periodic_updates, interval=7200, first=0)
+    # تشغيل التحديث التلقائي في الخلفية
+    asyncio.create_task(periodic_updates(app))
 
-    logging.info("🚀 Gold Bot التجريبي مع زر بدأ!")
+    logging.info("🚀 Gold Bot بدأ مع زر وتحديث تلقائي")
     app.run_polling()
 
 if __name__ == "__main__":
