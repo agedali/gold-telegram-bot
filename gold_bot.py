@@ -1,14 +1,12 @@
 import logging
 import os
 import random
-import asyncio
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, ContextTypes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 
 BASE_PRICES = {
     "ounce_usd": 1950.50,
@@ -28,39 +26,20 @@ def format_price_message(prices: dict):
         "💰 **تحديث أسعار الذهب** 💰\n\n"
         f"🔸 **الأونصة:** `{prices['ounce_usd']:.2f}` $\n"
         f"🔸 **الغرام بالدولار:** `{prices['gram_usd']:.2f}` $\n"
-        f"🔸 **الغرام بالدينار العراقي:** `{prices['gram_iqd']:,}` IQD\n\n"
-        "_اضغط الزر للحصول على تحديث فوري_"
+        f"🔸 **الغرام بالدينار العراقي:** `{prices['gram_iqd']:,}` IQD\n"
     )
 
-async def start(update, context):
-    keyboard = [[InlineKeyboardButton("💵 تحديث سعر الذهب", callback_data="get_price")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("مرحبًا! اضغط الزر للحصول على سعر الذهب الحالي:", reply_markup=reply_markup)
-
-async def button_callback(update, context):
-    query = update.callback_query
-    await query.answer()
+async def send_periodic_update(context: ContextTypes.DEFAULT_TYPE):
     prices = generate_fake_prices()
     message = format_price_message(prices)
-    await query.edit_message_text(text=message, parse_mode="Markdown")
+    await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+    logging.info("📩 تم إرسال تحديث تلقائي للقناة")
 
-async def periodic_updates(app):
-    while True:
-        prices = generate_fake_prices()
-        message = format_price_message(prices)
-        await app.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
-        logging.info("📩 تم إرسال تحديث تلقائي للقناة")
-        await asyncio.sleep(7200)  # كل ساعتين
-
-# -----------------------------
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_callback, pattern="get_price"))
+    # تشغيل التحديث التلقائي كل ساعتين باستخدام JobQueue
+    app.job_queue.run_repeating(send_periodic_update, interval=7200, first=0)
 
-    # تشغيل التحديث التلقائي داخل البوت
-    app.create_task(periodic_updates(app))
-
-    logging.info("🚀 Gold Bot بدأ مع زر وتحديث تلقائي")
+    logging.info("🚀 Gold Bot بدأ ويعمل على إرسال الأسعار كل ساعتين")
     app.run_polling()
