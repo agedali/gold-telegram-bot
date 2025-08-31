@@ -2,7 +2,7 @@ name: Gold Bot
 
 on:
   schedule:
-    - cron: "0 */2 * * *"   # تشغيل كل ساعتين عند الدقيقة 0
+    - cron: "0 */2 * * *"  # كل ساعتين
   workflow_dispatch:
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install "python-telegram-bot[job-queue]==20.7" requests
 
       - name: Run bot
         env:
