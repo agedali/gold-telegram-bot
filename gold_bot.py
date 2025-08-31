@@ -1,17 +1,14 @@
-import requests
-import time
 import logging
 import os
 import random
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # إعداد اللوج
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 
 BASE_PRICES = {
     "ounce_usd": 1950.50,
@@ -39,43 +36,39 @@ def format_price_message(prices: dict):
 
 # -----------------------------
 # أمر /start لإرسال الزر
-def start(update: Update, context: CallbackContext):
-    keyboard = [
-        [InlineKeyboardButton("💵 تحديث سعر الذهب", callback_data="get_price")]
-    ]
+async def start(update, context):
+    keyboard = [[InlineKeyboardButton("💵 تحديث سعر الذهب", callback_data="get_price")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text("مرحبًا! اضغط الزر للحصول على سعر الذهب الحالي:", reply_markup=reply_markup)
+    await update.message.reply_text("مرحبًا! اضغط الزر للحصول على سعر الذهب الحالي:", reply_markup=reply_markup)
 
 # -----------------------------
 # الرد على ضغط الزر
-def button_callback(update: Update, context: CallbackContext):
+async def button_callback(update, context):
     query = update.callback_query
-    query.answer()  # يجب الرد على الضغط حتى لا يبقى معلقًا
+    await query.answer()  # يجب الرد على الضغط
     prices = generate_fake_prices()
     message = format_price_message(prices)
-    query.edit_message_text(text=message, parse_mode="Markdown")
+    await query.edit_message_text(text=message, parse_mode="Markdown")
 
 # -----------------------------
 # إرسال تحديث تلقائي كل ساعتين للقناة
-def send_periodic_updates(context: CallbackContext):
+async def send_periodic_updates(context: ContextTypes.DEFAULT_TYPE):
     prices = generate_fake_prices()
     message = format_price_message(prices)
-    context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+    await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
 
 # -----------------------------
 def main():
-    updater = Updater(BOT_TOKEN)
-    dp = updater.dispatcher
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CallbackQueryHandler(button_callback, pattern="get_price"))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_callback, pattern="get_price"))
 
-    # تفعيل إرسال التحديث كل ساعتين
-    updater.job_queue.run_repeating(send_periodic_updates, interval=7200, first=0)
+    # تفعيل إرسال التحديث كل ساعتين (7200 ثانية)
+    app.job_queue.run_repeating(send_periodic_updates, interval=7200, first=0)
 
     logging.info("🚀 Gold Bot التجريبي مع زر بدأ!")
-    updater.start_polling()
-    updater.idle()
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
