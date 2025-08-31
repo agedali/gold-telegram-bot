@@ -2,7 +2,7 @@ name: Gold Bot
 
 on:
   schedule:
-    - cron: "0 * * * *"   # تشغيل كل ساعة
+    - cron: "* * * * *"   # تشغيل كل ساعة
   workflow_dispatch:
 
 jobs:
