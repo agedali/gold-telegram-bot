@@ -19,6 +19,20 @@ BASE_PRICES = {
 
 last_update_id = None
 
+# ------------------------------
+# ضبط أوامر البوت لتظهر عند كتابة /
+def set_bot_commands():
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands"
+    commands = [
+        {"command": "price", "description": "الحصول على سعر الذهب الحالي"}
+    ]
+    response = requests.post(url, json={"commands": commands})
+    if response.status_code == 200:
+        logging.info("✅ Bot command /price تم تفعيلها بنجاح")
+    else:
+        logging.error(f"❌ خطأ في تفعيل الأوامر: {response.text}")
+# ------------------------------
+
 def generate_fake_prices():
     prices = {}
     prices["ounce_usd"] = round(BASE_PRICES["ounce_usd"] + random.uniform(-5, 5), 2)
@@ -68,6 +82,7 @@ def handle_updates():
                 send_to_telegram(message, chat_id)
 
 def main_loop():
+    set_bot_commands()  # تفعيل ظهور /price تلقائيًا
     while True:
         # توليد أسعار جديدة
         prices = generate_fake_prices()
@@ -77,8 +92,8 @@ def main_loop():
         # الرد على أوامر /price
         handle_updates()
 
-        # الانتظار ساعة كاملة قبل التحديث التالي
-        time.sleep(3600)  # 3600 ثانية = ساعة واحدة
+        # الانتظار ساعتين قبل التحديث التالي
+        time.sleep(7200)  # 7200 ثانية = ساعتين
 
 if __name__ == "__main__":
     logging.info("🚀 Gold Bot التجريبي بدأ!")
