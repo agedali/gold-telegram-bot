@@ -10,8 +10,16 @@ def get_spot_xau_usd():
     headers = {"X-API-KEY": GOLDPRICEZ_API_KEY}
     r = requests.get(url, headers=headers)
     r.raise_for_status()
-    data = r.json()
-    return float(data["ounce"])   # أونصة بالدولار
+    
+    # جرّب نطبع الرد ونشوف شكله
+    print("🔎 Raw response:", r.text)
+    
+    try:
+        data = r.json()
+        print("✅ Parsed JSON:", data)
+        return float(data["ounce"])   # إذا JSON مضبوط
+    except Exception as e:
+        raise RuntimeError(f"❌ Unexpected API response: {r.text}") from e
 
 def send_to_telegram(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
