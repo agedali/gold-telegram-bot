@@ -8,7 +8,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 
 BASE_PRICES = {
     "ounce_usd": 1950.50,
@@ -58,17 +58,17 @@ async def periodic_updates(app):
         await asyncio.sleep(7200)  # كل ساعتين
 
 # -----------------------------
-def main():
+async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="get_price"))
 
-    # تشغيل التحديث التلقائي في الخلفية
-    asyncio.create_task(periodic_updates(app))
+    # تشغيل التحديث التلقائي داخل الـ event loop الخاص بالـ Application
+    app.create_task(periodic_updates(app))
 
     logging.info("🚀 Gold Bot بدأ مع زر وتحديث تلقائي")
-    app.run_polling()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
