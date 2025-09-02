@@ -3,11 +3,13 @@ import os
 import requests
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 
+# إعداد اللوج
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+# مفاتيح البيئة
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
-GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")  # ضع مفتاح GoldAPI هنا
+CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")  # @channelusername أو -100xxxxxxxxx
+GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
 
 def fetch_gold_prices():
     """تجلب أسعار الذهب من GoldAPI"""
@@ -63,14 +65,18 @@ async def send_gold_prices(context: ContextTypes.DEFAULT_TYPE):
     if prices:
         message = format_message(prices)
         await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
-        logging.info("📩 تم إرسال أسعار الذهب")
+        logging.info("📩 تم إرسال أسعار الذهب إلى القناة")
 
 async def price_command(update, context: ContextTypes.DEFAULT_TYPE):
     """أمر /price لتحديث فوري"""
     prices = fetch_gold_prices()
     if prices:
         message = format_message(prices)
+        # إرسال للمستخدم مباشرة
         await update.message.reply_text(message, parse_mode="Markdown")
+        # إرسال للقناة أيضاً
+        await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+        logging.info("📩 تم إرسال أسعار الذهب للقناة بواسطة /price")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -78,8 +84,8 @@ if __name__ == "__main__":
     # إضافة أمر /price
     app.add_handler(CommandHandler("price", price_command))
 
-    # إرسال تحديث تلقائي كل ساعتين (7200 ثانية)
+    # إرسال تحديث تلقائي كل ساعتين (7200 ثانية) وفور بدء التشغيل
     app.job_queue.run_repeating(send_gold_prices, interval=7200, first=0)
 
-    logging.info("🚀 Gold Bot بدأ مع تحديث تلقائي وأمر /price")
+    logging.info("🚀 Gold Bot بدأ ويعمل مع تحديث تلقائي كل ساعتين وأمر /price")
     app.run_polling()
