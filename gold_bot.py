@@ -1,45 +1,85 @@
 import logging
 import os
-import random
-from telegram.ext import ApplicationBuilder, ContextTypes
+import requests
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
+GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")  # ضع مفتاح GoldAPI هنا
 
-BASE_PRICES = {
-    "ounce_usd": 1950.50,
-    "gram_usd": 62.73,
-    "gram_iqd": 915000
-}
+def fetch_gold_prices():
+    """تجلب أسعار الذهب من GoldAPI"""
+    url = "https://www.goldapi.io/api/XAU/USD"
+    headers = {
+        "x-access-token": GOLDAPI_KEY,
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        
+        # أسعار الغرام
+        gram_24k = data.get("price_gram_24k")
+        gram_22k = data.get("price_gram_22k")
+        gram_21k = data.get("price_gram_21k")
+        
+        # حساب المثقال (5 غرام)
+        mithqal_24k = gram_24k * 5
+        mithqal_22k = gram_22k * 5
+        mithqal_21k = gram_21k * 5
+        
+        return {
+            "24k": {"gram": gram_24k, "mithqal": mithqal_24k},
+            "22k": {"gram": gram_22k, "mithqal": mithqal_22k},
+            "21k": {"gram": gram_21k, "mithqal": mithqal_21k}
+        }
+        
+    except requests.exceptions.RequestException as e:
+        logging.error(f"❌ Error fetching gold prices: {e}")
+        return None
 
-def generate_fake_prices():
-    prices = {}
-    prices["ounce_usd"] = round(BASE_PRICES["ounce_usd"] + random.uniform(-5, 5), 2)
-    prices["gram_usd"] = round(prices["ounce_usd"] / 31.1035, 2)
-    prices["gram_iqd"] = int(prices["gram_usd"] * 14580)
-    return prices
-
-def format_price_message(prices: dict):
+def format_message(prices: dict):
+    """تنسيق الرسالة بشكل احترافي"""
     return (
-        "💰 **تحديث أسعار الذهب** 💰\n\n"
-        f"🔸 **الأونصة:** `{prices['ounce_usd']:.2f}` $\n"
-        f"🔸 **الغرام بالدولار:** `{prices['gram_usd']:.2f}` $\n"
-        f"🔸 **الغرام بالدينار العراقي:** `{prices['gram_iqd']:,}` IQD\n"
+        "💰 **أسعار الذهب اليوم** 💰\n\n"
+        f"🔹 **عيار 24**:\n"
+        f"   - الغرام: `{prices['24k']['gram']:.2f}` $\n"
+        f"   - المثقال: `{prices['24k']['mithqal']:.2f}` $\n\n"
+        f"🔹 **عيار 22**:\n"
+        f"   - الغرام: `{prices['22k']['gram']:.2f}` $\n"
+        f"   - المثقال: `{prices['22k']['mithqal']:.2f}` $\n\n"
+        f"🔹 **عيار 21**:\n"
+        f"   - الغرام: `{prices['21k']['gram']:.2f}` $\n"
+        f"   - المثقال: `{prices['21k']['mithqal']:.2f}` $\n"
     )
 
-async def send_periodic_update(context: ContextTypes.DEFAULT_TYPE):
-    prices = generate_fake_prices()
-    message = format_price_message(prices)
-    await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
-    logging.info("📩 تم إرسال تحديث تلقائي للقناة")
+async def send_gold_prices(context: ContextTypes.DEFAULT_TYPE):
+    """إرسال الرسالة للقناة"""
+    prices = fetch_gold_prices()
+    if prices:
+        message = format_message(prices)
+        await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+        logging.info("📩 تم إرسال أسعار الذهب")
+
+async def price_command(update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر /price لتحديث فوري"""
+    prices = fetch_gold_prices()
+    if prices:
+        message = format_message(prices)
+        await update.message.reply_text(message, parse_mode="Markdown")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # تشغيل التحديث التلقائي كل ساعتين باستخدام JobQueue
-    app.job_queue.run_repeating(send_periodic_update, interval=7200, first=0)
+    # إضافة أمر /price
+    app.add_handler(CommandHandler("price", price_command))
 
-    logging.info("🚀 Gold Bot بدأ ويعمل على إرسال الأسعار كل ساعتين")
+    # إرسال تحديث تلقائي كل ساعتين (7200 ثانية)
+    app.job_queue.run_repeating(send_gold_prices, interval=7200, first=0)
+
+    logging.info("🚀 Gold Bot بدأ مع تحديث تلقائي وأمر /price")
     app.run_polling()
