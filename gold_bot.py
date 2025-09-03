@@ -67,18 +67,32 @@ def format_message(prices: dict):
     msg += "💎 ميزات متاحة للجميع:\n- حساب أرباحك من الذهب\n\nاختر زرًا أدناه."
     return msg
 
+# ================== /price ==================
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prices = fetch_gold_prices()
     keyboard = [
-        [InlineKeyboardButton("عيار 24", callback_data="24k"),
-         InlineKeyboardButton("عيار 22", callback_data="22k"),
-         InlineKeyboardButton("عيار 21", callback_data="21k")],
+        [InlineKeyboardButton("عيار 24", callback_data="show_24k"),
+         InlineKeyboardButton("عيار 22", callback_data="show_22k"),
+         InlineKeyboardButton("عيار 21", callback_data="show_21k")],
         [InlineKeyboardButton("حساب أرباحك من الذهب 💰", callback_data="start_buy")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(format_message(prices), reply_markup=reply_markup, parse_mode="Markdown")
 
-# ================== Conversation ==================
+async def show_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    prices = fetch_gold_prices()
+    key = query.data.replace("show_", "")
+    selected = prices[key]
+    await query.edit_message_text(
+        f"🟢 **سعر الذهب - {key.upper()}**\n"
+        f"- الغرام: `{selected['gram']:.2f}` $\n"
+        f"- المثقال: `{selected['mithqal']:.2f}` $",
+        parse_mode="Markdown"
+    )
+
+# ================== ConversationHandler للأرباح ==================
 async def start_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query if update.callback_query else None
     keyboard = [
@@ -156,27 +170,13 @@ async def enter_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ أدخل قيمة رقمية صحيحة للسعر.")
         return ENTER_PRICE
 
-# ================== زر عرض الأسعار ==================
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data in ["24k","22k","21k"]:
-        prices = fetch_gold_prices()
-        selected = prices[query.data]
-        await query.edit_message_text(
-            f"🟢 **سعر الذهب - {query.data.upper()}**\n"
-            f"- الغرام: `{selected['gram']:.2f}` $\n"
-            f"- المثقال: `{selected['mithqal']:.2f}` $",
-            parse_mode="Markdown"
-        )
-
 # ================== Main ==================
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("buy", start_buy),
-                      CallbackQueryHandler(start_buy, pattern="start_buy")],
+        entry_points=[CallbackQueryHandler(start_buy, pattern="start_buy"),
+                      CommandHandler("buy", start_buy)],
         states={
             SELECT_KARAT: [CallbackQueryHandler(select_karat)],
             SELECT_UNIT: [CallbackQueryHandler(select_unit)],
@@ -187,7 +187,8 @@ if __name__ == "__main__":
     )
 
     app.add_handler(CommandHandler("price", price_command))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    # Handler خاص بعرض الأسعار بدون التعارض
+    app.add_handler(CallbackQueryHandler(show_price, pattern="show_.*"))
     app.add_handler(conv_handler)
 
     logging.info("🚀 Gold Bot بدأ ويعمل")
