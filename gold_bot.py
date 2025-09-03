@@ -141,7 +141,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             quantity = float(text.replace(",", "."))
             cursor.execute("UPDATE users SET buy_quantity=?, step='enter_price' WHERE user_id=?", (quantity, user_id))
             conn.commit()
-            await update.message.reply_text(f"أدخل سعر الشراء لكل {buy_unit}:")
+            await update.message.reply_text(f"✅ تم حفظ الكمية: {quantity} {buy_unit}\nالآن، أدخل سعر الشراء لكل {buy_unit}:")
         except ValueError:
             await update.message.reply_text("⚠️ يرجى إدخال رقم صحيح للكمية.")
 
@@ -179,5 +179,5 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    logging.info("🚀 Gold Bot بدأ ويعمل مع /price و /buy")
+    logging.info("🚀 Gold Bot بدأ ويعمل مع /price و زر حساب الأرباح")
     app.run_polling()
