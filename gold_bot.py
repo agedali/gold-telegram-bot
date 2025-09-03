@@ -3,6 +3,8 @@ import os
 import requests
 import sqlite3
 from datetime import datetime
+from io import BytesIO
+import plotly.graph_objects as go
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -48,20 +50,17 @@ conn.commit()
 
 
 def fetch_gold_prices():
-    """تجلب أسعار الذهب من GoldAPI"""
     url = "https://www.goldapi.io/api/XAU/USD"
     headers = {"x-access-token": GOLDAPI_KEY, "Content-Type": "application/json"}
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
-
         return {
             "24k": {"gram": data.get("price_gram_24k"), "mithqal": data.get("price_gram_24k")*5},
             "22k": {"gram": data.get("price_gram_22k"), "mithqal": data.get("price_gram_22k")*5},
             "21k": {"gram": data.get("price_gram_21k"), "mithqal": data.get("price_gram_21k")*5},
         }
-
     except requests.exceptions.RequestException as e:
         logging.error(f"❌ Error fetching gold prices: {e}")
         return None
@@ -76,7 +75,7 @@ def format_message(prices: dict):
         current = prices[karat]["gram"]
         color = "🟢" if current >= 0 else "🔴"
         message += f"{color} **عيار {karat[:-1]}**\n- الغرام: `{current:.2f}` $\n- المثقال: `{prices[karat]['mithqal']:.2f}` $\n\n"
-    message += "💎 الميزات المتاحة:\n- تنبيهات لحظية للسعر\n- متابعة أكثر من عيار\n- سجل الأسعار محفوظ للرسوم البيانية لاحقًا\n"
+    message += "💎 الميزات المتاحة:\n- تنبيهات لحظية للسعر\n- متابعة أكثر من عيار\n- سجل الأسعار محفوظ للرسم البياني\n"
     message += "اختر العيار للعرض أو أحد الروابط أدناه."
     return message
 
@@ -103,11 +102,11 @@ async def send_gold_prices(context: ContextTypes.DEFAULT_TYPE):
             """, (user_id, karat, current_price, now))
             conn.commit()
 
-            # تنبيه لحظي (مجاني لكل المستخدمين)
+            # تنبيه لحظي
             color = "🟢" if current_price >= 0 else "🔴"
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"{color} **تنبيه سعر الذهب {karat.upper()}**\nالسعر الحالي: `{current_price:.2f}` $\nالميزات متاحة للجميع.",
+                text=f"{color} **تنبيه سعر الذهب {karat.upper()}**\nالسعر الحالي: `{current_price:.2f}` $",
                 parse_mode="Markdown"
             )
 
@@ -121,6 +120,7 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("عيار 24", callback_data="24k"),
          InlineKeyboardButton("عيار 22", callback_data="22k"),
          InlineKeyboardButton("عيار 21", callback_data="21k")],
+        [InlineKeyboardButton("عرض الرسم البياني 📈", callback_data="chart")],
     ]
 
     # أزرار الشركاء
@@ -143,6 +143,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected = prices[query.data]
         message = f"💰 **سعر الذهب - {query.data.upper()}**\n- الغرام: `{selected['gram']:.2f}` $\n- المثقال: `{selected['mithqal']:.2f}` $"
         await query.edit_message_text(message, parse_mode="Markdown")
+
+    elif query.data == "chart":
+        user_id = query.from_user.id
+        # جلب كل البيانات لكل العيارات
+        cursor.execute("SELECT karat, date, price FROM price_history WHERE user_id=? ORDER BY date ASC", (user_id,))
+        data = cursor.fetchall()
+        if not data:
+            await query.edit_message_text("⚠️ لا توجد بيانات للرسم البياني بعد.")
+            return
+
+        # تجهيز البيانات للرسم البياني
+        chart_data = {}
+        for karat, date, price in data:
+            chart_data.setdefault(karat, []).append((date, price))
+
+        fig = go.Figure()
+        for karat, values in chart_data.items():
+            dates, prices_list = zip(*values)
+            fig.add_trace(go.Scatter(x=dates, y=prices_list, mode='lines+markers', name=f"{karat.upper()}"))
+
+        fig.update_layout(
+            title="📈 تاريخ أسعار الذهب",
+            xaxis_title="التاريخ",
+            yaxis_title="السعر ($)",
+            template="plotly_dark"
+        )
+
+        img_bytes = fig.to_image(format="png")
+        bio = BytesIO(img_bytes)
+        bio.name = "chart.png"
+        bio.seek(0)
+
+        await context.bot.send_photo(chat_id=user_id, photo=bio)
 
 
 if __name__ == "__main__":
