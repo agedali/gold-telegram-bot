@@ -2,276 +2,190 @@ import logging
 import os
 import requests
 import sqlite3
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
     CommandHandler,
     CallbackQueryHandler,
-    ConversationHandler,
     MessageHandler,
     filters,
 )
 
-# ================== إعداد اللوج ==================
+# إعداد اللوج
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# ================== مفاتيح البيئة ==================
+# متغيرات البيئة
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
 
-# ================== قاعدة البيانات ==================
+# قاعدة البيانات
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS purchase_price (
-    user_id INTEGER,
-    karat TEXT,
-    purchase_price REAL,  -- سعر الوحدة (لكل غرام أو لكل مثقال)
-    unit TEXT,            -- gram أو mithqal
-    amount REAL,          -- الكمية التي اشتراها المستخدم
-    PRIMARY KEY(user_id, karat, unit)
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    step TEXT DEFAULT '',
+    buy_karat TEXT DEFAULT '',
+    buy_unit TEXT DEFAULT '',
+    buy_amount REAL DEFAULT 0,
+    buy_price REAL DEFAULT 0
 )
 """)
 conn.commit()
 
-# ================== ثوابت المحادثة ==================
-SELECT_KARAT, SELECT_UNIT, ENTER_AMOUNT, ENTER_PRICE = range(4)
-
-# ================== أسماء الأيام بالعربية ==================
-ARABIC_DAYS = {
-    0: "الاثنين", 1: "الثلاثاء", 2: "الأربعاء",
-    3: "الخميس", 4: "الجمعة", 5: "السبت", 6: "الأحد"
-}
-
-# ================== أدوات مساعدة ==================
-def baghdad_now():
-    return datetime.now(ZoneInfo("Asia/Baghdad"))
-
-def main_keyboard():
-    # زر واحد فقط لبدء حساب الأرباح
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("حساب أرباحك من الذهب 💰", callback_data="action:buy")]
-    ])
-
+# ========== جلب أسعار الذهب ==========
 def fetch_gold_prices():
-    """جلب أسعار الذهب الحالية بالدولار من GoldAPI"""
-    url = "https://www.goldapi.io/api/XAU/USD"
-    headers = {"x-access-token": GOLDAPI_KEY, "Content-Type": "application/json"}
+    """جلب أسعار الذهب من GoldAPI"""
     try:
-        r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        url = "https://www.goldapi.io/api/XAU/USD"
+        headers = {"x-access-token": GOLDAPI_KEY}
+        response = requests.get(url, headers=headers)
+        data = response.json()
 
-        # أسعار الغرام لكل عيار
-        g24 = float(data.get("price_gram_24k") or 0)
-        g22 = float(data.get("price_gram_22k") or 0)
-        g21 = float(data.get("price_gram_21k") or 0)
-
-        if not all([g24, g22, g21]):
+        if "price_gram_24k" not in data:
+            logging.error(f"❌ API response missing data: {data}")
             return None
 
-        # المثقال = 5 غرام
+        gram_24k = data["price_gram_24k"]
+        gram_22k = data["price_gram_22k"]
+        gram_21k = data["price_gram_21k"]
+
         return {
-            "24k": {"gram": g24, "mithqal": g24 * 5},
-            "22k": {"gram": g22, "mithqal": g22 * 5},
-            "21k": {"gram": g21, "mithqal": g21 * 5},
+            "24k": {"gram": gram_24k, "mithqal": gram_24k * 5},
+            "22k": {"gram": gram_22k, "mithqal": gram_22k * 5},
+            "21k": {"gram": gram_21k, "mithqal": gram_21k * 5},
         }
+
     except Exception as e:
-        logging.exception("Failed to fetch gold prices: %s", e)
+        logging.error(f"❌ Error fetching gold prices: {e}")
         return None
 
-def format_prices_message(prices: dict) -> str:
-    now = baghdad_now()
-    day = ARABIC_DAYS[now.weekday()]
-    date = now.strftime("%d/%m/%Y")
-    # نستخدم HTML لتفادي مشاكل Markdown
-    msg = f"💰 <b>أسعار الذهب اليوم - {day} {date}</b> 💰\n\n"
-    for karat in ["24k", "22k", "21k"]:
-        human = karat[:-1]  # 24, 22, 21
-        gram = prices[karat]["gram"]
-        mithqal = prices[karat]["mithqal"]
-        msg += (
-            f"• <b>عيار {human}</b>\n"
-            f"  - الغرام: <code>{gram:.2f}</code> $\n"
-            f"  - المثقال: <code>{mithqal:.2f}</code> $\n\n"
-        )
-    msg += "اضغط الزر بالأسفل لحساب أرباحك بناءً على سعر شرائك 👇"
-    return msg
+# ========== منطق الربح والخسارة ==========
+def calculate_profit_loss(buy_price, current_price, amount):
+    diff = (current_price - buy_price) * amount
+    if diff > 0:
+        return f"🟢 لديك ربح قدره: {diff:.2f} $"
+    elif diff < 0:
+        return f"🔴 لديك خسارة قدرها: {abs(diff):.2f} $"
+    else:
+        return "⚖️ لا يوجد ربح ولا خسارة."
 
-# ================== الأوامر العامة ==================
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "أهلًا بك! هذا بوت أسعار الذهب وحساب الأرباح.\n\n"
-        "– لعرض الأسعار الحالية: استخدم /price\n"
-        "– لحساب أرباحك من الذهب: استخدم /buy أو اضغط الزر بالأسفل.",
-        reply_markup=main_keyboard(),
-        parse_mode="HTML"
-    )
+# ========== الأوامر ==========
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    cursor.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (user_id,))
+    conn.commit()
 
-async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    prices = fetch_gold_prices()
-    if not prices:
-        await update.message.reply_text("⚠️ تعذر جلب أسعار الذهب حاليًا. حاول لاحقًا.")
+    keyboard = [
+        [InlineKeyboardButton("💰 حساب أرباحك من الذهب", callback_data="buy_start")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text("مرحباً 👋\nاستخدم الزر أدناه لحساب أرباحك أو خسارتك من الذهب:", reply_markup=reply_markup)
+
+async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر /buy يبدأ عملية الحساب"""
+    user_id = update.message.from_user.id
+    cursor.execute("UPDATE users SET step='choose_karat' WHERE user_id=?", (user_id,))
+    conn.commit()
+
+    keyboard = [
+        [InlineKeyboardButton("عيار 24", callback_data="karat_24k")],
+        [InlineKeyboardButton("عيار 22", callback_data="karat_22k")],
+        [InlineKeyboardButton("عيار 21", callback_data="karat_21k")],
+    ]
+    await update.message.reply_text("اختر العيار الذي اشتريت منه:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ========== الأزرار ==========
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "buy_start":
+        cursor.execute("UPDATE users SET step='choose_karat' WHERE user_id=?", (user_id,))
+        conn.commit()
+        keyboard = [
+            [InlineKeyboardButton("عيار 24", callback_data="karat_24k")],
+            [InlineKeyboardButton("عيار 22", callback_data="karat_22k")],
+            [InlineKeyboardButton("عيار 21", callback_data="karat_21k")],
+        ]
+        await query.edit_message_text("اختر العيار الذي اشتريت منه:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif query.data.startswith("karat_"):
+        karat = query.data.split("_")[1]
+        cursor.execute("UPDATE users SET buy_karat=?, step='choose_unit' WHERE user_id=?", (karat, user_id))
+        conn.commit()
+        keyboard = [
+            [InlineKeyboardButton("غرام", callback_data="unit_gram")],
+            [InlineKeyboardButton("مثقال", callback_data="unit_mithqal")],
+        ]
+        await query.edit_message_text("اختر الوحدة:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif query.data.startswith("unit_"):
+        unit = query.data.split("_")[1]
+        cursor.execute("UPDATE users SET buy_unit=?, step='enter_amount' WHERE user_id=?", (unit, user_id))
+        conn.commit()
+        await query.edit_message_text("✍️ أدخل الكمية (عدد الغرامات أو المثاقيل):")
+
+# ========== إدخال النص ==========
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    text = update.message.text.strip()
+
+    cursor.execute("SELECT step, buy_unit, buy_karat, buy_amount, buy_price FROM users WHERE user_id=?", (user_id,))
+    user = cursor.fetchone()
+
+    if not user:
         return
 
-    await update.message.reply_text(
-        format_prices_message(prices),
-        reply_markup=main_keyboard(),
-        parse_mode="HTML"
-    )
+    step, buy_unit, buy_karat, buy_amount, buy_price = user
 
-# ================== محادثة حساب الأرباح ==================
-async def start_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entry: من /buy أو من زر inline action:buy"""
-    query = update.callback_query if update.callback_query else None
-    text = "اختر العيار الذي قمت بشرائه:"
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("24k", callback_data="karat:24k")],
-        [InlineKeyboardButton("22k", callback_data="karat:22k")],
-        [InlineKeyboardButton("21k", callback_data="karat:21k")],
-    ])
+    if step == "enter_amount":
+        try:
+            amount = float(text)
+            cursor.execute("UPDATE users SET buy_amount=?, step='enter_price' WHERE user_id=?", (amount, user_id))
+            conn.commit()
+            await update.message.reply_text("✍️ أدخل سعر الشراء (بالدولار):")
+        except ValueError:
+            await update.message.reply_text("⚠️ الرجاء إدخال رقم صحيح.")
 
-    if query:
-        await query.answer()
-        await query.edit_message_text(text, reply_markup=kb)
-    else:
-        await update.message.reply_text(text, reply_markup=kb)
+    elif step == "enter_price":
+        try:
+            price = float(text)
+            cursor.execute("UPDATE users SET buy_price=?, step='done' WHERE user_id=?", (price, user_id))
+            conn.commit()
 
-    return SELECT_KARAT
+            # حساب الربح والخسارة
+            prices = fetch_gold_prices()
+            if not prices:
+                await update.message.reply_text("⚠️ تعذر جلب أسعار الذهب حاليًا.")
+                return
 
-async def select_karat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+            current_price = prices[buy_karat]["gram"] if buy_unit == "gram" else prices[buy_karat]["mithqal"]
+            result = calculate_profit_loss(buy_price, current_price, buy_amount)
 
-    # التحقق من النمط karat:xx
-    data = query.data
-    if not data.startswith("karat:"):
-        # إذا ضغط زر غير متوقع، نعيد المستخدم للبداية
-        await query.edit_message_text("حدث خطأ. لنعد للبداية.", reply_markup=main_keyboard())
-        return ConversationHandler.END
+            await update.message.reply_text(
+                f"🔎 تفاصيل العملية:\n"
+                f"- العيار: {buy_karat}\n"
+                f"- الوحدة: {buy_unit}\n"
+                f"- الكمية: {buy_amount}\n"
+                f"- سعر الشراء: {buy_price:.2f} $\n"
+                f"- السعر الحالي: {current_price:.2f} $\n\n"
+                f"{result}"
+            )
+        except ValueError:
+            await update.message.reply_text("⚠️ الرجاء إدخال رقم صحيح.")
 
-    karat = data.split(":", 1)[1]
-    context.user_data["karat"] = karat
-
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("غرام", callback_data="unit:gram")],
-        [InlineKeyboardButton("مثقال", callback_data="unit:mithqal")],
-    ])
-    await query.edit_message_text("اختر الوحدة التي اشتريت بها الذهب:", reply_markup=kb)
-    return SELECT_UNIT
-
-async def select_unit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-    if not data.startswith("unit:"):
-        await query.edit_message_text("حدث خطأ. لنعد للبداية.", reply_markup=main_keyboard())
-        return ConversationHandler.END
-
-    unit = data.split(":", 1)[1]
-    context.user_data["unit"] = unit
-
-    await query.edit_message_text(f"أدخل كمية الذهب بالـ {('غرام' if unit=='gram' else 'مثقال')}:")
-    return ENTER_AMOUNT
-
-async def enter_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    raw = (update.message.text or "").strip().replace(",", ".")
-    try:
-        amount = float(raw)
-        if amount <= 0:
-            raise ValueError
-    except Exception:
-        await update.message.reply_text("⚠️ أدخل قيمة رقمية صحيحة للكمية (أكبر من صفر):")
-        return ENTER_AMOUNT
-
-    context.user_data["amount"] = amount
-    await update.message.reply_text("أدخل <b>سعر الشراء الإجمالي بالدولار</b> (المبلغ الذي دفعته لهذه الكمية):", parse_mode="HTML")
-    return ENTER_PRICE
-
-async def enter_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    raw = (update.message.text or "").strip().replace(",", ".")
-    try:
-        total_price = float(raw)
-        if total_price <= 0:
-            raise ValueError
-    except Exception:
-        await update.message.reply_text("⚠️ أدخل قيمة رقمية صحيحة لسعر الشراء الإجمالي (أكبر من صفر):")
-        return ENTER_PRICE
-
-    karat = context.user_data.get("karat")
-    unit = context.user_data.get("unit")
-    amount = context.user_data.get("amount")
-
-    # سعر الشراء لكل وحدة
-    unit_price = total_price / amount
-
-    # حفظ العملية في القاعدة
-    try:
-        cursor.execute("""
-            INSERT OR REPLACE INTO purchase_price(user_id, karat, purchase_price, unit, amount)
-            VALUES (?, ?, ?, ?, ?)
-        """, (update.message.from_user.id, karat, unit_price, unit, amount))
-        conn.commit()
-    except Exception as e:
-        logging.exception("DB error: %s", e)
-
-    # جلب السعر الحالي وحساب الربح/الخسارة
-    prices = fetch_gold_prices()
-    if not prices:
-        await update.message.reply_text("⚠️ تم حفظ بياناتك، لكن تعذر جلب السعر الحالي الآن. حاول لاحقًا.")
-        return ConversationHandler.END
-
-    current_unit_price = prices[karat][unit]
-    profit_loss = (current_unit_price - unit_price) * amount
-    status = "ربح" if profit_loss >= 0 else "خسارة"
-    arrow = "🟢" if profit_loss >= 0 else "🔴"
-
-    msg = (
-        f"✅ <b>تم حفظ عملية الشراء</b>\n"
-        f"• العيار: <b>{karat}</b>\n"
-        f"• الوحدة: <b>{'غرام' if unit=='gram' else 'مثقال'}</b>\n"
-        f"• الكمية: <b>{amount}</b>\n"
-        f"• سعر الشراء لكل وحدة: <code>{unit_price:.2f}</code> $\n\n"
-        f"💹 <b>السعر الحالي</b> لكل وحدة: <code>{current_unit_price:.2f}</code> $\n"
-        f"{arrow} <b>{status}</b>: <code>{abs(profit_loss):.2f}</code> $"
-    )
-
-    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=main_keyboard())
-    return ConversationHandler.END
-
-# ================== نقطة دخول البوت ==================
+# ========== تشغيل البوت ==========
 if __name__ == "__main__":
-    if not BOT_TOKEN:
-        raise SystemExit("❌ TELEGRAM_TOKEN غير موجود في المتغيرات البيئية.")
-    if not GOLDAPI_KEY:
-        logging.warning("⚠️ GOLDAPI_KEY غير موجود. لن تعمل الأسعار والربح/الخسارة.")
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # أوامر
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("price", price_command))
-    # نفس محادثة الأرباح عبر /buy أو الزر
-    conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("buy", start_buy),
-            CallbackQueryHandler(start_buy, pattern=r"^action:buy$")
-        ],
-        states={
-            SELECT_KARAT: [CallbackQueryHandler(select_karat, pattern=r"^karat:(24k|22k|21k)$")],
-            SELECT_UNIT: [CallbackQueryHandler(select_unit, pattern=r"^unit:(gram|mithqal)$")],
-            ENTER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_amount)],
-            ENTER_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_price)],
-        },
-        fallbacks=[],
-        allow_reentry=True,
-    )
-    app.add_handler(conv)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("buy", buy_command))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    logging.info("🚀 Gold Bot يعمل الآن")
+    logging.info("🚀 Gold Bot يعمل الآن...")
     app.run_polling()
