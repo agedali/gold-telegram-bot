@@ -3,8 +3,6 @@ import os
 import requests
 import sqlite3
 from datetime import datetime
-from io import BytesIO
-import plotly.graph_objects as go
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -66,16 +64,27 @@ def fetch_gold_prices():
         return None
 
 
+# ترجمة أيام الأسبوع للعربي
+DAYS_AR = {
+    "Monday": "الاثنين",
+    "Tuesday": "الثلاثاء",
+    "Wednesday": "الأربعاء",
+    "Thursday": "الخميس",
+    "Friday": "الجمعة",
+    "Saturday": "السبت",
+    "Sunday": "الأحد"
+}
+
 def format_message(prices: dict):
     now = datetime.now()
-    day_name = now.strftime("%A")
+    day_name = DAYS_AR[now.strftime("%A")]
     date_str = now.strftime("%d/%m/%Y")
     message = f"💰 **أسعار الذهب اليوم - {day_name}, {date_str}** 💰\n\n"
     for karat in ["24k", "22k", "21k"]:
         current = prices[karat]["gram"]
         color = "🟢" if current >= 0 else "🔴"
         message += f"{color} **عيار {karat[:-1]}**\n- الغرام: `{current:.2f}` $\n- المثقال: `{prices[karat]['mithqal']:.2f}` $\n\n"
-    message += "💎 الميزات المتاحة:\n- تنبيهات لحظية للسعر\n- متابعة أكثر من عيار\n- سجل الأسعار محفوظ للرسم البياني\n"
+    message += "💎 الميزات المتاحة:\n- تنبيهات لحظية للسعر\n- متابعة أكثر من عيار\n- سجل الأسعار محفوظ\n"
     message += "اختر العيار للعرض أو أحد الروابط أدناه."
     return message
 
@@ -120,7 +129,6 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("عيار 24", callback_data="24k"),
          InlineKeyboardButton("عيار 22", callback_data="22k"),
          InlineKeyboardButton("عيار 21", callback_data="21k")],
-        [InlineKeyboardButton("عرض الرسم البياني 📈", callback_data="chart")],
     ]
 
     # أزرار الشركاء
@@ -143,39 +151,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected = prices[query.data]
         message = f"💰 **سعر الذهب - {query.data.upper()}**\n- الغرام: `{selected['gram']:.2f}` $\n- المثقال: `{selected['mithqal']:.2f}` $"
         await query.edit_message_text(message, parse_mode="Markdown")
-
-    elif query.data == "chart":
-        user_id = query.from_user.id
-        # جلب كل البيانات لكل العيارات
-        cursor.execute("SELECT karat, date, price FROM price_history WHERE user_id=? ORDER BY date ASC", (user_id,))
-        data = cursor.fetchall()
-        if not data:
-            await query.edit_message_text("⚠️ لا توجد بيانات للرسم البياني بعد.")
-            return
-
-        # تجهيز البيانات للرسم البياني
-        chart_data = {}
-        for karat, date, price in data:
-            chart_data.setdefault(karat, []).append((date, price))
-
-        fig = go.Figure()
-        for karat, values in chart_data.items():
-            dates, prices_list = zip(*values)
-            fig.add_trace(go.Scatter(x=dates, y=prices_list, mode='lines+markers', name=f"{karat.upper()}"))
-
-        fig.update_layout(
-            title="📈 تاريخ أسعار الذهب",
-            xaxis_title="التاريخ",
-            yaxis_title="السعر ($)",
-            template="plotly_dark"
-        )
-
-        img_bytes = fig.to_image(format="png")
-        bio = BytesIO(img_bytes)
-        bio.name = "chart.png"
-        bio.seek(0)
-
-        await context.bot.send_photo(chat_id=user_id, photo=bio)
 
 
 if __name__ == "__main__":
