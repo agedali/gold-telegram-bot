@@ -16,7 +16,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 # مفاتيح البيئة
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
 
 # روابط الشركاء
@@ -31,8 +30,8 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
-    preferred_karats TEXT DEFAULT '24k,22k,21k',
-    alert_percentage REAL DEFAULT 1.0
+    preferred_karat TEXT DEFAULT '24k',
+    last_price REAL DEFAULT 0
 )
 """)
 cursor.execute("""
@@ -46,6 +45,16 @@ CREATE TABLE IF NOT EXISTS price_history (
 """)
 conn.commit()
 
+# ترجمة أيام الأسبوع للعربي
+DAYS_AR = {
+    "Monday": "الاثنين",
+    "Tuesday": "الثلاثاء",
+    "Wednesday": "الأربعاء",
+    "Thursday": "الخميس",
+    "Friday": "الجمعة",
+    "Saturday": "السبت",
+    "Sunday": "الأحد"
+}
 
 def fetch_gold_prices():
     url = "https://www.goldapi.io/api/XAU/USD"
@@ -63,18 +72,6 @@ def fetch_gold_prices():
         logging.error(f"❌ Error fetching gold prices: {e}")
         return None
 
-
-# ترجمة أيام الأسبوع للعربي
-DAYS_AR = {
-    "Monday": "الاثنين",
-    "Tuesday": "الثلاثاء",
-    "Wednesday": "الأربعاء",
-    "Thursday": "الخميس",
-    "Friday": "الجمعة",
-    "Saturday": "السبت",
-    "Sunday": "الأحد"
-}
-
 def format_message(prices: dict):
     now = datetime.now()
     day_name = DAYS_AR[now.strftime("%A")]
@@ -84,41 +81,40 @@ def format_message(prices: dict):
         current = prices[karat]["gram"]
         color = "🟢" if current >= 0 else "🔴"
         message += f"{color} **عيار {karat[:-1]}**\n- الغرام: `{current:.2f}` $\n- المثقال: `{prices[karat]['mithqal']:.2f}` $\n\n"
-    message += "💎 الميزات المتاحة:\n- تنبيهات لحظية للسعر\n- متابعة أكثر من عيار\n- سجل الأسعار محفوظ\n"
+    message += "💎 الميزات المتاحة:\n- تنبيهات لحظية للسعر\n- اختيار العيار المفضل\n- عرض سجل الأسعار\n"
     message += "اختر العيار للعرض أو أحد الروابط أدناه."
     return message
-
 
 async def send_gold_prices(context: ContextTypes.DEFAULT_TYPE):
     prices = fetch_gold_prices()
     if not prices:
         return
 
-    cursor.execute("SELECT user_id, preferred_karats, alert_percentage FROM users")
-    users = cursor.fetchall()
     now = datetime.now().strftime("%Y-%m-%d")
-    
+    cursor.execute("SELECT user_id, preferred_karat, last_price FROM users")
+    users = cursor.fetchall()
+
     for user in users:
-        user_id, karats, alert_percentage = user
-        karat_list = karats.split(",")
-        for karat in karat_list:
-            current_price = prices[karat]["gram"]
+        user_id, karat, last_price = user
+        current_price = prices[karat]["gram"]
 
-            # حفظ السعر في جدول price_history
-            cursor.execute("""
-                INSERT OR REPLACE INTO price_history(user_id, karat, price, date)
-                VALUES (?, ?, ?, ?)
-            """, (user_id, karat, current_price, now))
-            conn.commit()
-
-            # تنبيه لحظي
-            color = "🟢" if current_price >= 0 else "🔴"
+        # تحقق من التغير أكثر من 1%
+        if last_price == 0 or abs(current_price - last_price)/last_price >= 0.01:
+            color = "🟢" if current_price >= last_price else "🔴"
             await context.bot.send_message(
                 chat_id=user_id,
                 text=f"{color} **تنبيه سعر الذهب {karat.upper()}**\nالسعر الحالي: `{current_price:.2f}` $",
                 parse_mode="Markdown"
             )
+            cursor.execute("UPDATE users SET last_price=? WHERE user_id=?", (current_price, user_id))
+            conn.commit()
 
+        # حفظ السعر في جدول price_history
+        cursor.execute("""
+            INSERT OR REPLACE INTO price_history(user_id, karat, price, date)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, karat, current_price, now))
+        conn.commit()
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -131,36 +127,50 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("عيار 21", callback_data="21k")],
     ]
 
-    # أزرار الشركاء
     for link in AFFILIATE_LINKS:
         keyboard.append([InlineKeyboardButton(link["text"], url=link["url"])])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(format_message(fetch_gold_prices()), reply_markup=reply_markup, parse_mode="Markdown")
 
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    cursor.execute("SELECT karat, price, date FROM price_history WHERE user_id=? ORDER BY date DESC", (user_id,))
+    rows = cursor.fetchall()
+    if not rows:
+        await update.message.reply_text("⚠️ لا يوجد سجل أسعار بعد.")
+        return
+
+    message = "📊 **سجل أسعار الذهب** 📊\n\n"
+    last_prices = {}
+    for karat, price, date in rows:
+        prev = last_prices.get(karat, price)
+        color = "🟢" if price >= prev else "🔴"
+        message += f"{color} {karat.upper()} - {date}: `{price:.2f}` $\n"
+        last_prices[karat] = price
+
+    await update.message.reply_text(message, parse_mode="Markdown")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data in ["24k", "22k", "21k"]:
+        cursor.execute("UPDATE users SET preferred_karat=? WHERE user_id=?", (query.data, query.from_user.id))
+        conn.commit()
         prices = fetch_gold_prices()
-        if not prices:
-            await query.edit_message_text("⚠️ تعذر جلب الأسعار حالياً.")
-            return
         selected = prices[query.data]
         message = f"💰 **سعر الذهب - {query.data.upper()}**\n- الغرام: `{selected['gram']:.2f}` $\n- المثقال: `{selected['mithqal']:.2f}` $"
         await query.edit_message_text(message, parse_mode="Markdown")
-
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("price", price_command))
+    app.add_handler(CommandHandler("history", history_command))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # إرسال تحديث تلقائي كل ساعة
     app.job_queue.run_repeating(send_gold_prices, interval=3600, first=0)
 
-    logging.info("🚀 Gold Bot بدأ ويعمل مع تحديث تلقائي كل ساعة وأمر /price")
+    logging.info("🚀 Gold Bot بدأ ويعمل مع تحديث تلقائي كل ساعة وأمر /price و /history")
     app.run_polling()
