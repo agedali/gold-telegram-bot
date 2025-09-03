@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 # مفاتيح البيئة
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # @channelusername أو -100xxxxxxxxx
+CHAT_ID = os.getenv("CHAT_ID")  # @channelusername أو -100xxxxxxxxx
 GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
 PAYMENT_TOKEN = os.getenv("PAYMENT_TOKEN")  # Provider Token للنجوم
 OKX_WALLET = os.getenv("OKX_WALLET", "TQEFoYompvJzbpaWLp8HWXBsV1aHwZ94n8")  # محفظة USDT TRC20
@@ -29,7 +29,7 @@ AFFILIATE_LINKS = [
     {"text": "Lamazvezdochka Bot", "url": "https://t.me/lamazvezdochkabot?start=_tgr_Xrek0LhhNzUy"}
 ]
 
-# إعداد قاعدة البيانات البسيطة
+# إعداد قاعدة البيانات
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
@@ -37,7 +37,10 @@ CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     subscription TEXT DEFAULT 'free',
     preferred_gram REAL DEFAULT 0,
-    preferred_karat TEXT DEFAULT '24k'
+    preferred_karat TEXT DEFAULT '24k',
+    last_price_24k REAL DEFAULT 0,
+    last_price_22k REAL DEFAULT 0,
+    last_price_21k REAL DEFAULT 0
 )
 """)
 conn.commit()
@@ -67,39 +70,43 @@ def fetch_gold_prices():
         return None
 
 
-def format_message(prices: dict):
+def format_message(prices: dict, last_prices: dict = None):
     """تنسيق الرسالة مع ألوان ارتفاع/انخفاض السعر"""
     message = "💰 **أسعار الذهب اليوم** 💰\n\n"
     for karat in ["24k","22k","21k"]:
-        prev = 0  # يمكنك حفظ السعر السابق في قاعدة بيانات إذا أردت
         current = prices[karat]["gram"]
-        color = "🟢" if current >= prev else "🔴"
+        last = last_prices.get(karat, 0) if last_prices else 0
+        color = "🟢" if current >= last else "🔴"
         message += f"{color} **عيار {karat[:-1]}**\n- الغرام: `{current:.2f}` $\n- المثقال: `{prices[karat]['mithqal']:.2f}` $\n\n"
-    message += "💎 للاشتراك المميز والحصول على ميزات إضافية مثل:\n"
+    message += "💎 الميزات المميزة (الآن مجانية لتجربة):\n"
     message += "- تنبيهات لحظية للسعر\n- اختيار العيار المفضل\n- عرض الرسوم البيانية\n\n"
     message += "اختر طريقة الاشتراك أدناه."
     return message
 
 
 async def send_gold_prices(context: ContextTypes.DEFAULT_TYPE):
-    """إرسال الأسعار لكل المستخدمين المميزين"""
+    """إرسال الأسعار لكل المستخدمين"""
     prices = fetch_gold_prices()
     if not prices:
         return
-    cursor.execute("SELECT user_id, subscription, preferred_karat, preferred_gram FROM users")
+
+    cursor.execute("SELECT user_id, last_price_24k, last_price_22k, last_price_21k FROM users")
     users = cursor.fetchall()
     for user in users:
-        user_id, subscription, karat, preferred_gram = user
-        if subscription == "premium" and preferred_gram > 0:
+        user_id, last_24, last_22, last_21 = user
+        last_prices = {"24k": last_24, "22k": last_22, "21k": last_21}
+
+        for karat in ["24k","22k","21k"]:
             current_price = prices[karat]["gram"]
-            if abs(current_price - preferred_gram)/preferred_gram >= 0.01:
-                color = "🟢" if current_price >= preferred_gram else "🔴"
+            if abs(current_price - last_prices[karat])/max(last_prices[karat],1) >= 0.01:
+                color = "🟢" if current_price >= last_prices[karat] else "🔴"
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=f"{color} **تنبيه سعر الذهب {karat.upper()}**\nالسعر الحالي: `{current_price:.2f}` $\nالاشتراك المميز يتيح لك متابعة التنبيهات اللحظية.",
+                    text=f"{color} **تنبيه سعر الذهب {karat.upper()}**\nالسعر الحالي: `{current_price:.2f}` $",
                     parse_mode="Markdown"
                 )
-                cursor.execute("UPDATE users SET preferred_gram=? WHERE user_id=?", (current_price, user_id))
+                # تحديث السعر الأخير
+                cursor.execute(f"UPDATE users SET last_price_{karat}=? WHERE user_id=?", (current_price, user_id))
                 conn.commit()
 
 
@@ -108,6 +115,11 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     cursor.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (user_id,))
     conn.commit()
+
+    # جلب آخر الأسعار
+    cursor.execute("SELECT last_price_24k, last_price_22k, last_price_21k FROM users WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
+    last_prices = {"24k": row[0], "22k": row[1], "21k": row[2]} if row else None
 
     keyboard = [
         [InlineKeyboardButton("عيار 24", callback_data="24k"),
@@ -122,7 +134,7 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(link["text"], url=link["url"])])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(format_message(fetch_gold_prices()), reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text(format_message(fetch_gold_prices(), last_prices), reply_markup=reply_markup, parse_mode="Markdown")
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -137,13 +149,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         selected = prices[query.data]
         user_id = query.from_user.id
-        cursor.execute("SELECT subscription FROM users WHERE user_id=?", (user_id,))
-        subscription = cursor.fetchone()
-        if subscription and subscription[0] == "premium":
-            cursor.execute("UPDATE users SET preferred_gram=?, preferred_karat=? WHERE user_id=?",
-                           (selected["gram"], query.data, user_id))
-            conn.commit()
-        color = "🟢" if selected["gram"] >= 0 else "🔴"
+
+        # جلب السعر السابق للمقارنة
+        cursor.execute(f"SELECT last_price_{query.data} FROM users WHERE user_id=?", (user_id,))
+        last_price = cursor.fetchone()[0]
+        color = "🟢" if selected["gram"] >= last_price else "🔴"
+
+        # تحديث السعر الأخير
+        cursor.execute(f"UPDATE users SET last_price_{query.data}=? WHERE user_id=?", (selected["gram"], user_id))
+        conn.commit()
+
         message = f"{color} **سعر الذهب - {query.data.upper()}**\n- الغرام: `{selected['gram']:.2f}` $\n- المثقال: `{selected['mithqal']:.2f}` $"
         await query.edit_message_text(message, parse_mode="Markdown")
 
@@ -183,13 +198,4 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # أوامر وأزرار
-    app.add_handler(CommandHandler("price", price_command))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
-    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
-
-    # إرسال تحديث تلقائي كل ساعة
-    app.job_queue.run_repeating(send_gold_prices, interval=3600, first=0)
-
-    logging.info("🚀 Gold Bot بدأ ويعمل مع تحديث تلقائي كل ساعة وأمر /price")
-    app.run_polling()
+    app.add_handler(CommandHandler("price", price_command
