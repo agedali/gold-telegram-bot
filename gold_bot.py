@@ -198,4 +198,13 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # أوامر وأزرار
-    app.add_handler(CommandHandler("price", price_command
+    app.add_handler(CommandHandler("price", price_command))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+
+    # إرسال تحديث تلقائي كل ساعة
+    app.job_queue.run_repeating(send_gold_prices, interval=3600, first=0)
+
+    logging.info("🚀 Gold Bot بدأ ويعمل مع تحديث تلقائي كل ساعة وأمر /price")
+    app.run_polling()
