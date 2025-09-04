@@ -56,7 +56,7 @@ def fetch_gold_prices():
                 "gram": data.get("price_gram_21k"),
                 "mithqal": data.get("price_gram_21k") * 5
             },
-            "ounce": data.get("price_ounce")   # ⬅️ تمت إضافة الأونصة
+            "ounce": data.get("price_ounce")
         }
     except requests.exceptions.RequestException as e:
         logging.error(f"❌ Error fetching gold prices: {e}")
@@ -75,7 +75,6 @@ def format_prices_message(prices: dict):
         message += f"   - الغرام: `{prices[karat]['gram']:.2f}` $\n"
         message += f"   - المثقال: `{prices[karat]['mithqal']:.2f}` $\n\n"
 
-    # إضافة سعر الأونصة
     if "ounce" in prices and prices["ounce"]:
         message += f"🏅 الأونصة: `{prices['ounce']:.2f}` $\n\n"
 
@@ -134,9 +133,12 @@ async def buy_unit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def buy_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     try:
-        amount = float(update.message.text.replace(",", "."))  # يدعم النقطة والفاصلة
+        amount = float(update.message.text.replace(",", "."))  
         user_buy_data[user_id]["amount"] = amount
-        await update.message.reply_text("أرسل سعر الشراء لكل وحدة بالدولار:")
+        unit = user_buy_data[user_id]["unit"]
+        await update.message.reply_text(
+            f"📌 أرسل السعر الإجمالي لشراء ({amount} {unit}) بالدولار:"
+        )
         return BUY_PRICE
     except ValueError:
         await update.message.reply_text("⚠️ الرجاء إرسال رقم صالح للكمية.")
@@ -146,11 +148,14 @@ async def buy_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def buy_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     try:
-        price = float(update.message.text.replace(",", "."))  # يدعم النقطة والفاصلة
-        user_buy_data[user_id]["price"] = price
-
-        # حساب الربح/الخسارة
+        total_price = float(update.message.text.replace(",", "."))  
         data = user_buy_data[user_id]
+        amount = data["amount"]
+
+        # حساب سعر الوحدة
+        buy_price_per_unit = total_price / amount
+        data["price"] = buy_price_per_unit
+
         prices = fetch_gold_prices()
         if not prices:
             await update.message.reply_text("⚠️ تعذر جلب أسعار الذهب حاليًا.")
@@ -158,25 +163,34 @@ async def buy_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         karat = data["karat"]
         unit = data["unit"]
-        amount = data["amount"]
-        buy_price = data["price"]
-
         current_price = prices[karat][unit]
-        profit = (current_price - buy_price) * amount
+
+        # حساب الربح/الخسارة
+        profit_total = (current_price - buy_price_per_unit) * amount
+
+        # تمييز الربح أو الخسارة بالألوان (أخضر/أحمر)
+        if profit_total > 0:
+            result_text = f"✅ *ربح*: `{profit_total:.2f}$`"
+        elif profit_total < 0:
+            result_text = f"❌ *خسارة*: `{profit_total:.2f}$`"
+        else:
+            result_text = "⚖️ لا يوجد ربح أو خسارة."
 
         await update.message.reply_text(
-            f"💰 نتائج حساب أرباحك:\n"
+            f"💰 *نتائج حساب أرباحك:*\n"
             f"عيار الذهب: {karat}\n"
             f"الوحدة: {unit}\n"
             f"الكمية: {amount}\n"
-            f"سعر الشراء: {buy_price} $\n"
-            f"السعر الحالي: {current_price:.2f} $\n"
-            f"الربح/الخسارة: {profit:.2f} $"
+            f"سعر الشراء الكلي: {total_price:.2f} $\n"
+            f"سعر الشراء للوحدة: {buy_price_per_unit:.2f} $\n"
+            f"السعر الحالي للوحدة: {current_price:.2f} $\n\n"
+            f"{result_text}",
+            parse_mode="Markdown"
         )
         user_buy_data.pop(user_id, None)
         return ConversationHandler.END
     except ValueError:
-        await update.message.reply_text("⚠️ الرجاء إرسال رقم صالح لسعر الشراء.")
+        await update.message.reply_text("⚠️ الرجاء إرسال رقم صالح للسعر.")
         return BUY_PRICE
 
 
@@ -191,10 +205,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # أوامر
     app.add_handler(CommandHandler("price", price_command))
 
-    # حساب الأرباح
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_button, pattern="buy")],
         states={
