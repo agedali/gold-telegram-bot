@@ -23,7 +23,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # @channelusername أو -100xxxx
 GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
 
 # مراحل حساب الأرباح
-BUY_KARAT, BUY_UNIT, BUY_AMOUNT, BUY_PRICE = range(4)
+BUY_KARAT, BUY_UNIT, BUY_PRICE = range(3)
 
 # تخزين بيانات المستخدم أثناء الحساب
 user_buy_data = {}
@@ -39,7 +39,6 @@ def fetch_gold_prices():
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
-
         return {
             "24k": {"gram": data.get("price_gram_24k"), "mithqal": data.get("price_gram_24k")*5},
             "22k": {"gram": data.get("price_gram_22k"), "mithqal": data.get("price_gram_22k")*5},
@@ -67,20 +66,20 @@ def format_prices_message(prices: dict, special_msg=""):
     message += "💎 اضغط على زر حساب أرباحك لمعرفة الربح أو الخسارة"
     return message
 
-async def send_prices_job(app_job_queue, special_msg=""):
+async def send_prices_job(context: ContextTypes.DEFAULT_TYPE):
+    """إرسال الأسعار التلقائي"""
     prices = fetch_gold_prices()
     if not prices:
         logging.error("⚠️ تعذر جلب أسعار الذهب حالياً.")
         return
+    hour = datetime.now().hour
+    special_msg = ""
+    if hour == 10:
+        special_msg = "📈 تم فتح بورصة العراق"
+    elif hour == 22:
+        special_msg = "📉 تم إغلاق بورصة العراق"
     message = format_prices_message(prices, special_msg)
-    from telegram.constants import ParseMode
-    await app_job_queue.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=ParseMode.MARKDOWN)
-
-async def schedule_prices(app):
-    """جدولة إرسال الأسعار كل ساعة من 10 صباحًا حتى 10 مساءً"""
-    for hour in range(10, 23):
-        app.job_queue.run_daily(send_prices_job, time=time(hour,0,0), context=app.job_queue)
-    logging.info("✅ جدولة إرسال الأسعار من 10 صباحًا حتى 10 مساءً")
+    await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
 
 # --- حساب الأرباح ---
 async def buy_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -119,12 +118,11 @@ async def buy_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         total_price = float(update.message.text.replace(",","."))
         data = user_buy_data[user_id]
-        unit_count = data.get("amount", 1)  # إذا لم تدخل كمية نعتبر 1
-        unit_price = total_price / unit_count
+        amount = data.get("amount", 1)
+        unit_price = total_price / amount
         data["total_price"] = total_price
         data["unit_price"] = unit_price
 
-        # جلب الأسعار الحالية
         prices = fetch_gold_prices()
         if not prices:
             await update.message.reply_text("⚠️ تعذر جلب أسعار الذهب حاليًا.")
@@ -133,12 +131,11 @@ async def buy_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         karat = data["karat"]
         unit = data["unit"]
         current_price = prices[karat][unit]
-        profit = (current_price - unit_price) * unit_count
+        profit = (current_price - unit_price) * amount
 
         result_msg = f"💰 **نتائج حساب أرباحك** 💰\n\n" \
                      f"عيار الذهب: {karat}\n" \
                      f"الوحدة: {unit}\n" \
-                     f"الكمية: {unit_count}\n" \
                      f"السعر الإجمالي: {total_price} $\n" \
                      f"السعر لكل وحدة: {unit_price:.2f} $\n" \
                      f"السعر الحالي: {current_price:.2f} $\n"
@@ -178,10 +175,11 @@ if __name__ == "__main__":
     app.add_handler(conv_handler)
 
     # إرسال الأسعار فورًا لتجربة
-    asyncio.run(send_prices_job(app.job_queue))
+    app.job_queue.run_once(send_prices_job, when=0)
 
     # جدولة الأسعار كل ساعة من 10 صباحًا حتى 10 مساءً
-    asyncio.run(schedule_prices(app))
+    for hour in range(10, 23):
+        app.job_queue.run_daily(send_prices_job, time=time(hour,0,0))
 
     logging.info("🚀 Gold Bot جاهز للعمل")
     app.run_polling()
