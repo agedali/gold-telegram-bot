@@ -2,35 +2,23 @@ import os
 import requests
 from bs4 import BeautifulSoup
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    CommandHandler,
-    ConversationHandler,
-    MessageHandler,
-    filters,
-)
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, ConversationHandler, MessageHandler, filters
 from datetime import datetime, time
 import asyncio
-import logging
-import traceback
+import nest_asyncio
 
-# --------- إعدادات Logging ---------
-logging.basicConfig(
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+nest_asyncio.apply()
 
-# --------- متغيرات البيئة ---------
+# --- متغيرات البيئة ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
 
-# --------- مراحل إدخال البيانات ---------
+# --- مراحل إدخال البيانات ---
 GRAMS, TOTAL_COST = range(2)
 user_data = {}
 
-# --------- جلب أسعار الذهب ---------
+# --- سحب أسعار الذهب ---
 def get_gold_prices():
     url = "https://www.goldapi.io/api/XAU/USD"
     headers = {"x-access-token": GOLDAPI_KEY, "Content-Type": "application/json"}
@@ -38,19 +26,18 @@ def get_gold_prices():
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
-        gram_24 = data.get("gram_24_in_usd")
+        gram = data['gram_24_in_usd']
         return {
-            "gram_24": gram_24,
-            "gram_22": gram_24 * 22 / 24,
-            "gram_21": gram_24 * 21 / 24,
-            "ounce": data.get("price_ounce_usd")
+            "gram_24": gram,
+            "gram_22": gram * 22 / 24,
+            "gram_21": gram * 21 / 24,
+            "ounce": data['price_ounce_usd']
         }
     except Exception as e:
-        logging.error("❌ خطأ في جلب أسعار الذهب")
-        logging.error(traceback.format_exc())
+        print("❌ Error fetching gold prices:", e)
         return None
 
-# --------- جلب أسعار الدولار واليورو مقابل الدينار العراقي ---------
+# --- سحب سعر الدولار واليورو مقابل الدينار العراقي ---
 def get_fx_rates():
     try:
         url = "https://qamaralfajr.com/production/exchange_rates.php"
@@ -58,22 +45,20 @@ def get_fx_rates():
         soup = BeautifulSoup(response.text, "html.parser")
         rates = {}
         table = soup.find("table")
-        if table:
-            for row in table.find_all("tr"):
-                cols = row.find_all("td")
-                if len(cols) >= 3:
-                    currency = cols[0].text.strip()
-                    buy = cols[1].text.strip()
-                    sell = cols[2].text.strip()
-                    if currency in ["USD", "EUR"]:
-                        rates[currency] = {"buy": buy, "sell": sell}
+        for row in table.find_all("tr"):
+            cols = row.find_all("td")
+            if len(cols) >= 3:
+                currency = cols[0].text.strip()
+                buy = cols[1].text.strip()
+                sell = cols[2].text.strip()
+                if currency in ["USD", "EUR"]:
+                    rates[currency] = {"buy": buy, "sell": sell}
         return rates
     except Exception as e:
-        logging.error("❌ خطأ في جلب أسعار العملات")
-        logging.error(traceback.format_exc())
+        print("❌ Error fetching FX rates:", e)
         return {}
 
-# --------- صياغة الرسالة ---------
+# --- صياغة الرسالة ---
 def format_message():
     gold = get_gold_prices()
     fx = get_fx_rates()
@@ -93,58 +78,43 @@ def format_message():
             msg += f"• {curr} شراء: {fx[curr]['buy']} | بيع: {fx[curr]['sell']}\n"
     return msg
 
-# --------- حساب الأرباح ---------
+# --- إدخال بيانات المستخدم ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("كم عدد الغرامات التي اشتريتها؟")
     return GRAMS
 
 async def get_grams(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_data['grams'] = float(update.message.text)
-        await update.message.reply_text(f"أرسل المبلغ الإجمالي بالدولار ({user_data['grams']} غرام):")
-        return TOTAL_COST
-    except Exception as e:
-        logging.error(traceback.format_exc())
-        await update.message.reply_text("❌ خطأ في إدخال عدد الغرامات. حاول مرة أخرى.")
-        return GRAMS
+    user_data['grams'] = float(update.message.text)
+    await update.message.reply_text(f"أرسل المبلغ الإجمالي بالدولار ({user_data['grams']} غرام):")
+    return TOTAL_COST
 
 async def get_total_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        total_cost = float(update.message.text)
-        grams = user_data['grams']
-        price_per_gram = total_cost / grams
-        gold = get_gold_prices()
-        if gold:
-            current_price = gold['gram_24']
-            profit = (current_price - price_per_gram) * grams
-            color = "🟢" if profit > 0 else "🔴"
-            await update.message.reply_text(f"{color} أرباحك: {profit:.2f} $")
-        return ConversationHandler.END
-    except Exception as e:
-        logging.error(traceback.format_exc())
-        await update.message.reply_text("❌ خطأ في حساب الأرباح.")
-        return ConversationHandler.END
+    total_cost = float(update.message.text)
+    grams = user_data['grams']
+    price_per_gram = total_cost / grams
+    gold = get_gold_prices()
+    if gold:
+        current_price = gold['gram_24']
+        profit = (current_price - price_per_gram) * grams
+        color = "🟢" if profit > 0 else "🔴"
+        await update.message.reply_text(f"{color} أرباحك: {profit:.2f} $")
+    return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("تم إلغاء العملية.")
     return ConversationHandler.END
 
-# --------- إرسال الأسعار ---------
-async def send_prices(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        msg = format_message()
-        await context.bot.send_message(chat_id=CHAT_ID, text=msg)
-        logging.info("✅ تم إرسال الأسعار")
-    except Exception as e:
-        logging.error("❌ خطأ أثناء إرسال الأسعار")
-        logging.error(traceback.format_exc())
+# --- إرسال الأسعار للبوت والقناة ---
+async def send_prices(bot):
+    msg = format_message()
+    await bot.send_message(chat_id=CHAT_ID, text=msg)
 
-# --------- جدولة الرسائل ---------
+# --- جدولة الرسائل ---
 async def schedule_prices(app):
     for hour in range(10, 19):  # من 10 صباحًا حتى 6 مساءً
-        app.job_queue.run_daily(send_prices, time=time(hour, 0, 0))
+        app.job_queue.run_daily(lambda ctx: asyncio.create_task(send_prices(ctx.bot)), time=time(hour, 0, 0))
 
-# --------- تشغيل البوت ---------
+# --- تشغيل البوت ---
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -158,15 +128,13 @@ async def main():
     )
     app.add_handler(conv_handler)
 
-    # إرسال الأسعار أول مرة عند التشغيل
-    await send_prices(ContextTypes.DEFAULT_TYPE(bot=app.bot))
+    # إرسال الأسعار أول مرة عند تشغيل البوت
+    await send_prices(app.bot)
 
-    # جدولة الرسائل
+    # جدولة الرسائل اليومية
     await schedule_prices(app)
 
     await app.run_polling()
 
 if __name__ == "__main__":
-    import nest_asyncio
-    nest_asyncio.apply()
     asyncio.run(main())
