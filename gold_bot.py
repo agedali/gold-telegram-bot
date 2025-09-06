@@ -29,12 +29,20 @@ def get_gold_prices():
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
-        gram = data['gram_24_in_usd']
+
+        # 👇 نطبع الرد لمعرفة المفاتيح
+        print("📊 GOLDAPI Response:", data)
+
+        # بعض الـ API يرسل السعر بالمفتاح "price"
+        gram = data.get("price_gram_usd", data.get("price"))
+        if not gram:
+            raise KeyError("price_gram_usd or price not found in API response")
+
         return {
             "gram_24": gram,
             "gram_22": gram * 22 / 24,
             "gram_21": gram * 21 / 24,
-            "ounce": data['price_ounce_usd']
+            "ounce": data.get("price", 0.0)
         }
     except Exception as e:
         print("❌ Error fetching gold prices:", e)
@@ -85,6 +93,13 @@ async def send_prices(context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("حساب الأرباح", callback_data="calculate_profit")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id=CHAT_ID, text=msg, reply_markup=reply_markup)
+
+# --- عند تشغيل البوت: إرسال الأسعار مباشرة ---
+async def send_initial_prices(app):
+    msg = format_message()
+    keyboard = [[InlineKeyboardButton("حساب الأرباح", callback_data="calculate_profit")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await app.bot.send_message(chat_id=CHAT_ID, text=msg, reply_markup=reply_markup)
 
 # --- التعامل مع ضغط الزر ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,12 +158,11 @@ async def main():
     app.add_handler(conv_handler)
 
     # إرسال الأسعار أول مرة عند تشغيل البوت
-    await send_prices(app.bot)
+    await send_initial_prices(app)
 
     # جدولة الرسائل
     await schedule_prices(app)
 
-    # تشغيل البوت
     await app.run_polling()
 
 if __name__ == "__main__":
