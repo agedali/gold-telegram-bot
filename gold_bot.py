@@ -1,7 +1,7 @@
 import logging
 import os
 import requests
-from datetime import datetime, time
+from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,24 +10,22 @@ from telegram.ext import (
     ConversationHandler,
     MessageHandler,
     filters,
-    JobQueue,
+    JobQueue
 )
 
-from bs4 import BeautifulSoup
-
-# إعداد اللوج
+# --- إعداد اللوج ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# مفاتيح البيئة
+# --- مفاتيح البيئة ---
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # @channelusername أو -100xxxx
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # قناة أو شخص
 GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
 
-# مراحل حساب الأرباح
-BUY_KARAT, BUY_UNIT, BUY_TOTAL = range(3)
+# --- مراحل حساب الأرباح ---
+BUY_KARAT, BUY_UNIT, BUY_AMOUNT, BUY_PRICE = range(4)
 user_buy_data = {}
 
-# خريطة الأيام بالعربي
+# --- خريطة الأيام بالعربي ---
 days_ar = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
 
 # --- جلب أسعار الذهب ---
@@ -55,19 +53,16 @@ def fetch_gold_prices():
 def fetch_currency_rates():
     try:
         url = "https://qamaralfajr.com/production/exchange_rates.php"
-        res = requests.get(url)
-        soup = BeautifulSoup(res.content, "html.parser")
-        table = soup.find("table")
-        rates = {}
-        for row in table.find_all("tr")[1:]:
-            cols = row.find_all("td")
-            name = cols[0].text.strip()
-            buy = cols[1].text.strip()
-            sell = cols[2].text.strip()
-            rates[name] = {"buy": buy, "sell": sell}
-        return rates
-    except Exception as e:
-        logging.error(f"❌ Error fetching currency rates: {e}")
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        return {
+            "USD_buy": data["USD"]["buy"],
+            "USD_sell": data["USD"]["sell"],
+            "EUR_buy": data["EUR"]["buy"],
+            "EUR_sell": data["EUR"]["sell"]
+        }
+    except:
         return None
 
 # --- تنسيق رسالة الأسعار ---
@@ -75,28 +70,36 @@ def format_prices_message(prices, currency_rates=None, special_msg=None):
     now = datetime.now()
     day = days_ar[now.weekday()]
     date_str = now.strftime("%d/%m/%Y")
-    message = f"💰 **أسعار الذهب والدولار اليوم - {day} {date_str}** 💰\n\n"
+    message = f"💰 **أسعار الذهب اليوم - {day} {date_str}** 💰\n\n"
     if special_msg:
-        message += f"⚡ {special_msg} ⚡\n\n"
+        message += f"{special_msg}\n\n"
     for karat in ["24k","22k","21k"]:
         message += f"🔹 عيار {karat[:-1]}:\n"
         message += f"   - الغرام: `{prices[karat]['gram']:.2f}` $\n"
         message += f"   - المثقال: `{prices[karat]['mithqal']:.2f}` $\n"
-    message += f"🔹 الأونصة: `{prices['ounce']:.2f}` $\n\n"
-
+    message += f"\n🔹 الأونصة: `{prices['ounce']:.2f}` $\n"
+    
     if currency_rates:
-        message += "💵 **أسعار العملات مقابل الدينار العراقي** 💵\n"
-        for name, rate in currency_rates.items():
-            message += f"{name}: شراء `{rate['buy']}` | بيع `{rate['sell']}`\n"
+        message += "\n💵 أسعار العملات مقابل الدينار العراقي:\n"
+        message += f"   - الدولار: شراء `{currency_rates['USD_buy']}` | بيع `{currency_rates['USD_sell']}`\n"
+        message += f"   - اليورو: شراء `{currency_rates['EUR_buy']}` | بيع `{currency_rates['EUR_sell']}`\n"
+
+    message += "\n💎 لحساب أرباحك استخدم الأزرار أدناه"
     return message
 
-# --- إرسال الأسعار ---
+# --- إرسال الأسعار للقناة ---
 async def send_prices(context: ContextTypes.DEFAULT_TYPE):
     prices = fetch_gold_prices()
     currency_rates = fetch_currency_rates()
     if prices:
         msg = format_prices_message(prices, currency_rates)
         await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+
+# --- إرسال الرسائل المجدولة من 10 صباحًا إلى 6 مساءً ---
+def schedule_jobs(app):
+    job_queue = app.job_queue
+    for hour in range(10, 19):  # من 10 صباحًا حتى 6 مساءً
+        job_queue.run_daily(send_prices, time=datetime.strptime(f"{hour}:00", "%H:%M").time())
 
 # --- حساب الأرباح ---
 async def buy_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -107,107 +110,92 @@ async def buy_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("22k", callback_data="22k"),
          InlineKeyboardButton("21k", callback_data="21k")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("اختر عيار الذهب الذي اشتريته:", reply_markup=reply_markup)
+    await query.edit_message_text("اختر عيار الذهب الذي اشتريته:", reply_markup=InlineKeyboardMarkup(keyboard))
     return BUY_KARAT
 
 async def buy_karat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     user_buy_data[user_id] = {"karat": query.data}
-    keyboard = [
-        [InlineKeyboardButton("غرام", callback_data="gram"),
-         InlineKeyboardButton("مثقال", callback_data="mithqal")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("اختر الوحدة (غرام أو مثقال):", reply_markup=reply_markup)
+    keyboard = [[InlineKeyboardButton("غرام", callback_data="gram"),
+                 InlineKeyboardButton("مثقال", callback_data="mithqal")]]
+    await query.edit_message_text("اختر الوحدة (غرام أو مثقال):", reply_markup=InlineKeyboardMarkup(keyboard))
     return BUY_UNIT
 
 async def buy_unit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     user_buy_data[user_id]["unit"] = query.data
-    await query.edit_message_text(f"أرسل السعر الإجمالي لشراء ({query.data}) الذي قمت بشرائه بالدولار:")
-    return BUY_TOTAL
+    await query.edit_message_text(f"أرسل السعر الإجمالي لشراء ({query.data}) الذي تم شراؤه بالدولار:")
+    return BUY_PRICE
 
-async def buy_total(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def buy_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    data = user_buy_data[user_id]
     try:
-        total = float(update.message.text.replace(",","."))  
-        amount = 1  # سيحسب تلقائي لاحقًا حسب الوحدة
+        total_price = float(update.message.text.replace(",","."))  
+        data = user_buy_data[user_id]
+        unit_amount = data.get("amount", 1)
+        price_per_unit = total_price / unit_amount
+        data["price"] = price_per_unit
+
+        # الحصول على السعر الحالي
         prices = fetch_gold_prices()
-        if not prices:
-            await update.message.reply_text("⚠️ تعذر جلب أسعار الذهب حاليًا.")
-            return ConversationHandler.END
+        current_price = prices[data["karat"]][data["unit"]]
+        profit = (current_price - price_per_unit) * unit_amount
 
-        unit = data["unit"]
-        karat = data["karat"]
-        # حساب السعر لكل وحدة
-        if unit == "gram":
-            unit_price = total / 1  # المستخدم كتب السعر الإجمالي لغرام واحد
-        else:
-            unit_price = total / 5  # المثقال = 5 غرام
-        current_price = prices[karat][unit]
-        profit = (current_price - unit_price) * 1  # كمية = 1 وحدة
-
-        color = "🟢" if profit >= 0 else "🔴"
-        status = "ربح" if profit >= 0 else "خسارة"
-
+        # رسالة النتائج مع اللون الأخضر/الأحمر
+        color = "🟢" if profit >=0 else "🔴"
         await update.message.reply_text(
-            f"{color} **نتائج حساب أرباحك:**\n"
-            f"عيار الذهب: {karat}\n"
-            f"الوحدة: {unit}\n"
-            f"السعر الذي اشتريت به لكل وحدة: {unit_price:.2f} $\n"
+            f"{color} نتائج حساب أرباحك:\n"
+            f"عيار الذهب: {data['karat']}\n"
+            f"الوحدة: {data['unit']}\n"
+            f"الكمية: {unit_amount}\n"
+            f"سعر الشراء لكل وحدة: {price_per_unit:.2f} $\n"
             f"السعر الحالي: {current_price:.2f} $\n"
-            f"الحالة: {status} {profit:.2f} $",
-            parse_mode="Markdown"
+            f"الربح/الخسارة: {profit:.2f} $"
         )
         user_buy_data.pop(user_id, None)
         return ConversationHandler.END
-    except ValueError:
+    except:
         await update.message.reply_text("⚠️ الرجاء إرسال رقم صالح.")
-        return BUY_TOTAL
+        return BUY_PRICE
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user_buy_data.pop(user_id, None)
+    user_buy_data.pop(update.message.from_user.id, None)
     await update.message.reply_text("❌ تم إلغاء العملية.")
     return ConversationHandler.END
 
-# --- Main ---
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+# --- التطبيق الرئيسي ---
+app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # إضافة محادثة حساب الأرباح
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(buy_button, pattern="buy")],
-        states={
-            BUY_KARAT: [CallbackQueryHandler(buy_karat, pattern="^(24k|22k|21k)$")],
-            BUY_UNIT: [CallbackQueryHandler(buy_unit, pattern="^(gram|mithqal)$")],
-            BUY_TOTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, buy_total)],
-        },
-        fallbacks=[MessageHandler(filters.Regex("^/cancel$"), cancel)],
-    )
-    app.add_handler(conv_handler)
+# إضافة محادثة حساب الأرباح
+conv_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(buy_button, pattern="buy")],
+    states={
+        BUY_KARAT: [CallbackQueryHandler(buy_karat, pattern="^(24k|22k|21k)$")],
+        BUY_UNIT: [CallbackQueryHandler(buy_unit, pattern="^(gram|mithqal)$")],
+        BUY_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, buy_price)],
+    },
+    fallbacks=[MessageHandler(filters.COMMAND, cancel)]
+)
+app.add_handler(conv_handler)
 
-    # زر حساب الأرباح
-    async def send_buy_button(context: ContextTypes.DEFAULT_TYPE):
-        keyboard = [[InlineKeyboardButton("حساب أرباحك 💰", callback_data="buy")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(chat_id=CHAT_ID, text="اضغط لحساب أرباحك:", reply_markup=reply_markup)
+# --- إرسال الأسعار أول مرة ---
+async def first_send():
+    prices = fetch_gold_prices()
+    currency_rates = fetch_currency_rates()
+    if prices:
+        msg = format_prices_message(prices, currency_rates, special_msg="تم فتح بورصة العراق")
+        await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
 
-    # إرسال الأسعار أول مرة عند التشغيل
-    async def first_send():
-        await send_prices(ContextTypes.DEFAULT_TYPE(application=app, job=None))
-        await send_buy_button(ContextTypes.DEFAULT_TYPE(application=app, job=None))
+# --- تشغيل البوت ---
+import asyncio
+async def main():
+    # إرسال الأسعار فورًا عند التشغيل
+    await first_send()
+    # جدولة الرسائل
+    schedule_jobs(app)
+    # تشغيل البوت
+    await app.run_polling()
 
-    import asyncio
-    asyncio.run(first_send())
-
-    # جدولة كل ساعة من 10 صباحًا حتى 6 مساءً
-    for hour in range(10, 19):
-        app.job_queue.run_daily(send_prices, time(hour, 0), days=(0,1,2,3,4,5,6))
-
-    logging.info("🚀 Gold Bot جاهز للعمل")
-    app.run_polling()
+asyncio.run(main())
