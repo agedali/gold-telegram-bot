@@ -3,7 +3,7 @@ name: Gold Bot
 on:
   workflow_dispatch:  # لتشغيله يدويًا
   schedule:
-    - cron: "0 10-22 * * *"  # كل ساعة من 10 صباحًا حتى 10 مساءً
+    - cron: "0 10-16 * * *"  # كل ساعة من 10 صباحًا حتى 10 مساءً
 
 jobs:
   run-bot:
