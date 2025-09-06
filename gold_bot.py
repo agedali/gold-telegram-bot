@@ -12,21 +12,16 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# --------------- إعداد اللوج ---------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# --------------- مفاتيح البيئة ---------------
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
 
-# --------------- مراحل حساب الأرباح ---------------
 BUY_KARAT, BUY_UNIT, BUY_AMOUNT = range(3)
 user_buy_data = {}
-
 days_ar = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
 
-# --------------- جلب أسعار الذهب ---------------
 def fetch_gold_prices():
     url = "https://www.goldapi.io/api/XAU/USD"
     headers = {"x-access-token": GOLDAPI_KEY, "Content-Type": "application/json"}
@@ -48,7 +43,6 @@ def fetch_gold_prices():
         logging.error(f"❌ Error fetching gold prices: {e}")
         return None
 
-# --------------- جلب أسعار الدولار واليورو مقابل الدينار العراقي ---------------
 def fetch_currency_rates():
     try:
         url = "https://qamaralfajr.com/production/exchange_rates.php"
@@ -64,7 +58,6 @@ def fetch_currency_rates():
         logging.error(f"❌ Error fetching currency rates: {e}")
         return None
 
-# --------------- تنسيق رسالة الأسعار ---------------
 def format_prices_message(prices, currency_rates, special_msg=None):
     now = datetime.now()
     day = days_ar[now.weekday()]
@@ -84,7 +77,6 @@ def format_prices_message(prices, currency_rates, special_msg=None):
     message += "💎 اضغط على زر حساب أرباحك لمعرفة الربح أو الخسارة"
     return message
 
-# --------------- إرسال الأسعار ---------------
 async def send_prices(context: ContextTypes.DEFAULT_TYPE):
     prices = fetch_gold_prices()
     currency_rates = fetch_currency_rates()
@@ -95,7 +87,7 @@ async def send_prices(context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown", reply_markup=reply_markup)
 
-# --------------- حساب الأرباح ---------------
+# حساب الأرباح
 async def buy_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -153,13 +145,11 @@ async def buy_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ الرجاء إدخال رقم صالح")
         return BUY_AMOUNT
 
-# --------------- التشغيل الرئيسي ---------------
 if __name__ == "__main__":
-    from telegram.ext import ConversationHandler
+    from telegram.ext import ConversationHandler, ApplicationRunner
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # إضافة حساب الأرباح
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_button, pattern="buy")],
         states={
@@ -171,11 +161,15 @@ if __name__ == "__main__":
     )
     app.add_handler(conv_handler)
 
-    # إرسال الأسعار أول مرة عند التشغيل
-    async def first_send():
-        await send_prices(ContextTypes.DEFAULT_TYPE(application=app, job=None))
+    # إرسال الأسعار فور تشغيل البوت
+    async def startup_send(app):
+        class TempContext:
+            def __init__(self, bot):
+                self.bot = bot
+        await send_prices(TempContext(app.bot))
+
     import asyncio
-    asyncio.run(first_send())
+    asyncio.run(startup_send(app))
 
     # إرسال الأسعار كل ساعة من 10 صباحًا حتى 10 مساءً
     for h in range(10, 23):
