@@ -1,28 +1,47 @@
 import os
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
-    ApplicationBuilder, ContextTypes, CallbackQueryHandler,
-    ConversationHandler, MessageHandler, filters
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    ContextTypes, ConversationHandler
 )
-from datetime import datetime, time
-import asyncio
-import nest_asyncio
 
-nest_asyncio.apply()
-
-# --- متغيرات البيئة ---
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+# --- المتغيرات من GitHub Secrets ---
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
+GOLDAPI_KEY = os.getenv("GOLDPRICEZ_KEY")
 
-# --- مراحل إدخال البيانات ---
-GRAMS, TOTAL_COST = range(2)
-user_data = {}
 
-# --- جلب أسعار الذهب بالدولار ---
-def get_gold_prices():
+# --- سحب سعر الدولار واليورو من موقع عراقي ---
+def get_fx_rates():
+    try:
+        url = "https://www.iqiraq.news/economy/69957--143500-.html"
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, "html.parser")
+        rates = {}
+
+        table = soup.find("table")
+        if not table:
+            return {}
+
+        for row in table.find_all("tr"):
+            cols = [c.text.strip().replace(",", "").replace(" ", "") for c in row.find_all("td")]
+            if len(cols) >= 3:
+                currency, buy, sell = cols[0], cols[1], cols[2]
+                if "دولار" in currency or "USD" in currency:
+                    rates["USD"] = {"buy": float(buy), "sell": float(sell)}
+                if "يورو" in currency or "EUR" in currency:
+                    rates["EUR"] = {"buy": float(buy), "sell": float(sell)}
+        return rates
+    except Exception as e:
+        print("❌ Error fetching FX rates:", e)
+        return {}
+
+
+# --- سحب أسعار الذهب من GoldAPI ---
+def get_gold_prices(iqd_rate):
     url = "https://www.goldapi.io/api/XAU/USD"
     headers = {"x-access-token": GOLDAPI_KEY, "Content-Type": "application/json"}
     try:
@@ -30,140 +49,83 @@ def get_gold_prices():
         response.raise_for_status()
         data = response.json()
 
-        # 👇 نطبع الرد لمعرفة المفاتيح
-        print("📊 GOLDAPI Response:", data)
-
-        # بعض الـ API يرسل السعر بالمفتاح "price"
-        gram = data.get("price_gram_usd", data.get("price"))
-        if not gram:
-            raise KeyError("price_gram_usd or price not found in API response")
+        gram_24_usd = data['price_gram_24k']
+        ounce_usd = data['price']
 
         return {
-            "gram_24": gram,
-            "gram_22": gram * 22 / 24,
-            "gram_21": gram * 21 / 24,
-            "ounce": data.get("price", 0.0)
+            "gram_24_usd": gram_24_usd,
+            "gram_22_usd": gram_24_usd * 22 / 24,
+            "gram_21_usd": gram_24_usd * 21 / 24,
+            "ounce_usd": ounce_usd,
+            # بالـ IQD
+            "gram_24_iqd": gram_24_usd * iqd_rate,
+            "gram_22_iqd": gram_24_usd * 22 / 24 * iqd_rate,
+            "gram_21_iqd": gram_24_usd * 21 / 24 * iqd_rate,
+            "ounce_iqd": ounce_usd * iqd_rate,
         }
     except Exception as e:
         print("❌ Error fetching gold prices:", e)
         return None
 
-# --- جلب سعر الدولار واليورو مقابل الدينار العراقي ---
-def get_fx_rates():
-    try:
-        url = "https://qamaralfajr.com/production/exchange_rates.php"
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, "html.parser")
-        rates = {}
-        table = soup.find("table")
-        for row in table.find_all("tr"):
-            cols = row.find_all("td")
-            if len(cols) >= 3:
-                currency = cols[0].text.strip()
-                buy = cols[1].text.strip()
-                sell = cols[2].text.strip()
-                if currency in ["USD", "EUR"]:
-                    rates[currency] = {"buy": buy, "sell": sell}
-        return rates
-    except Exception as e:
-        print("❌ Error fetching FX rates:", e)
-        return {}
 
 # --- صياغة الرسالة ---
 def format_message():
-    gold = get_gold_prices()
     fx = get_fx_rates()
+    if not fx or "USD" not in fx:
+        return "❌ خطأ في جلب أسعار الصرف."
+
+    usd_rate = fx["USD"]["sell"]  # سعر البيع بالدينار
+    gold = get_gold_prices(usd_rate)
     if not gold:
         return "❌ خطأ في جلب أسعار الذهب."
-    msg = f"📅 التاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    msg += "💰 أسعار الذهب بالدولار الأمريكي:\n"
-    msg += f"• عيار 24: {gold['gram_24']:.2f} $\n"
-    msg += f"• عيار 22: {gold['gram_22']:.2f} $\n"
-    msg += f"• عيار 21: {gold['gram_21']:.2f} $\n"
-    msg += f"• الأونصة: {gold['ounce']:.2f} $\n\n"
-    if fx:
-        msg += "💱 أسعار العملات مقابل الدينار العراقي:\n"
-        for curr in fx:
-            msg += f"• {curr} شراء: {fx[curr]['buy']} | بيع: {fx[curr]['sell']}\n"
+
+    msg = f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    msg += "💰 أسعار الذهب:\n"
+    msg += f"• 24k: {gold['gram_24_usd']:.2f} $ | {gold['gram_24_iqd']:.0f} IQD\n"
+    msg += f"• 22k: {gold['gram_22_usd']:.2f} $ | {gold['gram_22_iqd']:.0f} IQD\n"
+    msg += f"• 21k: {gold['gram_21_usd']:.2f} $ | {gold['gram_21_iqd']:.0f} IQD\n"
+    msg += f"• الأونصة: {gold['ounce_usd']:.2f} $ | {gold['ounce_iqd']:.0f} IQD\n\n"
+
+    msg += "💱 أسعار العملات مقابل الدينار العراقي:\n"
+    for curr, vals in fx.items():
+        msg += f"• {curr}: شراء {vals['buy']} | بيع {vals['sell']}\n"
+
     return msg
 
-# --- إرسال الأسعار مع زر حساب الأرباح ---
-async def send_prices(context: ContextTypes.DEFAULT_TYPE):
-    msg = format_message()
-    keyboard = [[InlineKeyboardButton("حساب الأرباح", callback_data="calculate_profit")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(chat_id=CHAT_ID, text=msg, reply_markup=reply_markup)
 
-# --- عند تشغيل البوت: إرسال الأسعار مباشرة ---
-async def send_initial_prices(app):
+# --- إرسال الأسعار مع زر ---
+async def send_prices(bot):
     msg = format_message()
-    keyboard = [[InlineKeyboardButton("حساب الأرباح", callback_data="calculate_profit")]]
+    keyboard = [[InlineKeyboardButton("📊 حساب الأرباح", callback_data="calc_profit")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await app.bot.send_message(chat_id=CHAT_ID, text=msg, reply_markup=reply_markup)
+    await bot.send_message(chat_id=CHAT_ID, text=msg, reply_markup=reply_markup)
 
-# --- التعامل مع ضغط الزر ---
+
+# --- زر حساب الأرباح ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(text="🔹 الرجاء إدخال عدد الغرامات التي اشتريتها:")
-    return GRAMS
 
-# --- حساب الأرباح ---
-async def get_grams(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_data['grams'] = float(update.message.text)
-        await update.message.reply_text(f"أرسل المبلغ الإجمالي بالدولار ({user_data['grams']} غرام):")
-        return TOTAL_COST
-    except ValueError:
-        await update.message.reply_text("❌ يجب إدخال رقم صحيح للغرامات.")
-        return GRAMS
+    if query.data == "calc_profit":
+        await query.edit_message_text(
+            text="💡 أدخل عدد الغرامات التي اشتريتها (مثال: 10)"
+        )
 
-async def get_total_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        total_cost = float(update.message.text)
-        grams = user_data['grams']
-        price_per_gram = total_cost / grams
-        gold = get_gold_prices()
-        if gold:
-            current_price = gold['gram_24']
-            profit = (current_price - price_per_gram) * grams
-            color = "🟢" if profit > 0 else "🔴"
-            await update.message.reply_text(f"{color} أرباحك: {profit:.2f} $")
-        return ConversationHandler.END
-    except ValueError:
-        await update.message.reply_text("❌ يجب إدخال رقم صحيح للمبلغ.")
-        return TOTAL_COST
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("تم إلغاء العملية.")
-    return ConversationHandler.END
-
-# --- جدولة إرسال الأسعار كل ساعة من 10 صباحًا حتى 6 مساءً ---
-async def schedule_prices(app):
-    for hour in range(10, 19):
-        app.job_queue.run_daily(send_prices, time=time(hour, 0, 0), days=(0,1,2,3,4,5,6))
 
 # --- تشغيل البوت ---
 async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler, pattern="calculate_profit")],
-        states={
-            GRAMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_grams)],
-            TOTAL_COST: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_total_cost)],
-        },
-        fallbacks=[MessageHandler(filters.Regex('^إلغاء$'), cancel)]
-    )
-    app.add_handler(conv_handler)
+    # زر حساب الأرباح
+    app.add_handler(CallbackQueryHandler(button_handler))
 
-    # إرسال الأسعار أول مرة عند تشغيل البوت
-    await send_initial_prices(app)
+    # إرسال الأسعار عند التشغيل
+    await send_prices(app.bot)
 
-    # جدولة الرسائل
-    await schedule_prices(app)
-
+    print("✅ Bot is running...")
     await app.run_polling()
 
+
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
