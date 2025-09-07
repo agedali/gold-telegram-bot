@@ -1,7 +1,7 @@
 name: Gold Bot
 
 on:
-  workflow_dispatch:  # لتشغيله يدويًا
+  workflow_dispatch:    # لتشغيله يدويًا
   schedule:
     - cron: "0 10-18 * * *"  # كل ساعة من 10 صباحًا حتى 6 مساءً
 
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # سحب الكود من الريبو
+      # سحب الكود من المستودع
       - name: Checkout repo
         uses: actions/checkout@v3
 
