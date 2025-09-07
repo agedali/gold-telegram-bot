@@ -24,15 +24,18 @@ def get_gold_prices():
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
-        gram24 = data.get('gram_24_in_usd')
+
+        # استخدم المفتاح الصحيح من GOLDAPI
+        gram24 = data.get("price_gram_24k") or data.get("price")  # تأكد من المفتاح الصحيح
         if not gram24:
             print("❌ خطأ في استدعاء أسعار الذهب")
             return None
+
         return {
             "gram_24": gram24,
             "gram_22": gram24 * 22 / 24,
             "gram_21": gram24 * 21 / 24,
-            "ounce": data.get('price_ounce_usd', 0)
+            "ounce": data.get("price_ounce") or 0
         }
     except Exception as e:
         print("❌ Error fetching gold prices:", e)
@@ -71,6 +74,7 @@ def format_message():
     gold = get_gold_prices()
     fx = get_fx_rates()
     msg = f"📅 التاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
     if gold:
         msg += "💰 أسعار الذهب بالدولار الأمريكي:\n"
         msg += f"• عيار 24: {gold['gram_24']:.2f} $\n"
@@ -89,14 +93,14 @@ def format_message():
 
     return msg
 
-# --- دالة إرسال الأسعار مع زر حساب الأرباح ---
-async def send_prices(bot):
+# --- إرسال الأسعار مع زر حساب الأرباح ---
+async def send_prices(context: ContextTypes.DEFAULT_TYPE):
     msg = format_message()
     keyboard = [
         [InlineKeyboardButton("حساب الأرباح", callback_data="calculate_profit")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await bot.send_message(chat_id=CHAT_ID, text=msg, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=CHAT_ID, text=msg, reply_markup=reply_markup)
 
 # --- التعامل مع زر حساب الأرباح ---
 async def button_handler(update: "telegram.Update", context: ContextTypes.DEFAULT_TYPE):
@@ -107,7 +111,7 @@ async def button_handler(update: "telegram.Update", context: ContextTypes.DEFAUL
 # --- جدولة إرسال الأسعار كل ساعة من 10 صباحًا حتى 6 مساءً ---
 async def schedule_prices(app):
     for hour in range(10, 19):
-        app.job_queue.run_daily(send_prices, time=time(hour, 0, 0), days=(0,1,2,3,4,5,6), context=app.bot)
+        app.job_queue.run_daily(send_prices, time=time(hour, 0, 0))
 
 # --- تشغيل البوت ---
 async def main():
@@ -115,7 +119,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(button_handler, pattern="calculate_profit"))
 
     # إرسال الأسعار أول مرة عند التشغيل
-    await send_prices(app.bot)
+    await send_prices(app)
 
     # جدولة الإرسال
     await schedule_prices(app)
