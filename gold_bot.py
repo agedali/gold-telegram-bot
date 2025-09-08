@@ -9,6 +9,7 @@ from telegram.ext import (
 from datetime import datetime, time
 import asyncio
 import nest_asyncio
+import pytz
 
 nest_asyncio.apply()
 
@@ -128,7 +129,7 @@ async def get_total_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     # تحديد سعر الذهب الحالي حسب العيار
-    price_per_unit = gold[f'gram_{karat}'] if user_data['type'] == "غرام" else gold[f'gram_{karat}']*4.25  # 1 مثقال = 4.25 غرام
+    price_per_unit = gold[f'gram_{karat}'] if user_data['type'] == "GRAM" else gold[f'gram_{karat}']*4.25
     profit = (price_per_unit * grams_or_mitqal) - total_cost
     color = "🟢" if profit > 0 else "🔴"
     await update.message.reply_text(f"{color} أرباحك: {profit:.2f} $\n")
@@ -147,8 +148,13 @@ async def send_prices_job(context: ContextTypes.DEFAULT_TYPE):
 
 # ===== جدولة الرسائل =====
 async def schedule_prices(app):
-    for hour in range(10, 19):  # من 10 صباحًا حتى 6 مساءً
-        app.job_queue.run_daily(send_prices_job, time=time(hour,0,0), days=(0,1,2,3,4,5,6))
+    baghdad_tz = pytz.timezone("Asia/Baghdad")
+    for hour in range(10, 18):  # من 10 صباحًا حتى 5 مساءً
+        app.job_queue.run_daily(
+            send_prices_job,
+            time=time(hour, 0, 0, tzinfo=baghdad_tz),
+            days=(0, 1, 2, 3, 4, 5, 6)
+        )
 
 # ===== تشغيل البوت =====
 async def main():
