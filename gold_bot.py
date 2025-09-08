@@ -1,10 +1,7 @@
 import os
 import requests
-from bs4 import BeautifulSoup
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, ContextTypes
-)
+from telegram.ext import ApplicationBuilder, ContextTypes
 from datetime import datetime, time
 import asyncio
 import nest_asyncio
@@ -34,56 +31,37 @@ def get_gold_prices():
         print("❌ خطأ في استدعاء أسعار الذهب:", e)
         return None
 
-# ===== جلب أسعار صرف الدولار واليورو مقابل الدينار العراقي =====
-def get_fx_rates():
-    try:
-        url = "https://qamaralfajr.com/production/exchange_rates.php"
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, "html.parser")
-        rates = {}
-        table = soup.find("table")
-        if not table:
-            return None
-        for row in table.find_all("tr"):
-            cols = row.find_all("td")
-            if len(cols) >= 3:
-                currency = cols[0].text.strip()
-                buy = cols[1].text.strip()
-                sell = cols[2].text.strip()
-                if currency in ["USD", "EUR"]:
-                    rates[currency] = {"buy": buy, "sell": sell}
-        return rates
-    except Exception as e:
-        print("❌ خطأ في جلب أسعار الصرف:", e)
-        return None
-
 # ===== صياغة الرسالة =====
-def format_message():
+def format_message(opening=False, closing=False):
     gold = get_gold_prices()
-    fx = get_fx_rates()
     msg = f"📅 التاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+    if opening:
+        msg += "✅ تم فتح بورصة العراق\n\n"
+    elif closing:
+        msg += "❌ تم اغلاق بورصة العراق\n\n"
+
     if gold:
         msg += "💰 أسعار الذهب بالدولار الأمريكي:\n"
         msg += f"• عيار 24: {gold['gram_24']:.2f} $\n"
         msg += f"• عيار 22: {gold['gram_22']:.2f} $\n"
         msg += f"• عيار 21: {gold['gram_21']:.2f} $\n"
-        msg += f"• الأونصة: {gold['ounce']:.2f} $\n\n"
+        msg += f"• الأونصة: {gold['ounce']:.2f} $\n"
     else:
-        msg += "❌ خطأ في جلب أسعار الذهب.\n\n"
-
-    if fx:
-        msg += "💱 أسعار العملات مقابل الدينار العراقي:\n"
-        for curr in fx:
-            msg += f"• {curr} شراء: {fx[curr]['buy']} | بيع: {fx[curr]['sell']}\n"
-    else:
-        msg += "❌ خطأ في جلب أسعار الصرف.\n"
+        msg += "❌ خطأ في جلب أسعار الذهب.\n"
     return msg
 
 # ===== إرسال الأسعار للقناة =====
 async def send_prices_job(context: ContextTypes.DEFAULT_TYPE):
-    msg = format_message()
+    now = datetime.now()
+    opening = now.hour == 10
+    closing = now.hour == 17
+    msg = format_message(opening=opening, closing=closing)
     keyboard = [
-        [InlineKeyboardButton("📸 تابعنا على إنستغرام", url="https://www.instagram.com/aged_ali40?igsh=Nm42ZXVybTlia3Z0&utm_source=qr")]
+        [InlineKeyboardButton(
+            "📸 تابعنا على إنستغرام",
+            url="https://www.instagram.com/aged_ali40?igsh=Nm42ZXVybTlia3Z0&utm_source=qr"
+        )]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id=CHAT_ID, text=msg, reply_markup=reply_markup)
@@ -97,10 +75,10 @@ async def schedule_prices(app):
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # إرسال الأسعار أول مرة فور التشغيل
-    app.job_queue.run_once(send_prices_job, when=0)
+    # إرسال الأسعار أول مرة فور التشغيل الساعة الحالية
+    await send_prices_job(ContextTypes.DEFAULT_TYPE(bot=app.bot))
 
-    # جدولة الأسعار
+    # جدولة الرسائل
     await schedule_prices(app)
 
     # تشغيل البوت
