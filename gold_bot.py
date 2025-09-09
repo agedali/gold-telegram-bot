@@ -1,94 +1,96 @@
 import os
 import requests
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    ApplicationBuilder, ContextTypes,
-    CallbackQueryHandler
-)
-from datetime import datetime, time
 import asyncio
-import nest_asyncio
+from datetime import datetime, time
+from telegram import Bot
+from telegram.constants import ParseMode
 
-nest_asyncio.apply()
-
-# ===== متغيرات البيئة =====
+# المتغيرات من GitHub Secrets
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOLDAPI_KEY = os.getenv("GOLDAPI_KEY")
 
-# ===== جلب أسعار الذهب من GOLDAPI =====
+bot = Bot(token=TOKEN)
+
+# حساب الأسعار
 def get_gold_prices():
     url = "https://www.goldapi.io/api/XAU/USD"
-    headers = {"x-access-token": GOLDAPI_KEY, "Content-Type": "application/json"}
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        return {
-            "gram_24": data["price_gram_24k"],
-            "gram_22": data["price_gram_22k"],
-            "gram_21": data["price_gram_21k"],
-            "ounce": data["price"]
-        }
-    except Exception as e:
-        print("❌ خطأ في استدعاء أسعار الذهب:", e)
+    headers = {
+        "x-access-token": GOLDAPI_KEY,
+        "Content-Type": "application/json"
+    }
+    response = requests.get(url, headers=headers)
+    data = response.json()
+
+    if "price" not in data:
         return None
 
-# ===== صياغة الرسالة =====
+    price_per_ounce = data["price"]  # سعر الأونصة بالدولار
+    price_per_gram = price_per_ounce / 31.1035
+    price_per_mithqal = price_per_gram * 5  # 1 مثقال = 5 غرام
+
+    # أسعار العيارات (نسبة نقاء الذهب)
+    karats = {
+        "عيار 24": 1.0,
+        "عيار 22": 22 / 24,
+        "عيار 21": 21 / 24,
+        "عيار 18": 18 / 24,
+    }
+
+    prices = {}
+    for karat, purity in karats.items():
+        gram_price = price_per_gram * purity
+        mithqal_price = price_per_mithqal * purity
+        prices[karat] = (round(gram_price, 2), round(mithqal_price, 2))
+
+    return {"karats": prices, "ounce": round(price_per_ounce, 2)}
+
+# صياغة الرسالة
 def format_message(opening=False, closing=False):
-    gold = get_gold_prices()
-    msg = f"📅 التاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    prices_data = get_gold_prices()
+    if not prices_data:
+        return "❌ خطأ في جلب أسعار الذهب."
+
+    prices = prices_data["karats"]
+    ounce_price = prices_data["ounce"]
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    msg = f"📅 {today}\n\n"
 
     if opening:
         msg += "✅ تم فتح بورصة العراق\n\n"
     elif closing:
-        msg += "❌ تم اغلاق بورصة العراق\n\n"
+        msg += "❌ تم إغلاق بورصة العراق\n\n"
 
-    if gold:
-        msg += "💰 أسعار الذهب بالدولار الأمريكي:\n"
-        for karat in [24, 22, 21]:
-            gram_price = gold[f'gram_{karat}']
-            mitqal_price = gram_price * 4.25  # تحويل إلى مثقال
-            msg += f"• عيار {karat}: {gram_price:.2f} $ للغرام | {mitqal_price:.2f} $ للمثقال\n"
-        msg += f"• الأونصة: {gold['ounce']:.2f} $\n"
-    else:
-        msg += "❌ خطأ في جلب أسعار الذهب.\n"
+    msg += f"💰 أسعار الذهب:\n• الأونصة: {ounce_price}$\n\n"
+    for karat, (gram, mithqal) in prices.items():
+        msg += f"{karat}:\n- للغرام: {gram}$\n- للمثقال: {mithqal}$\n\n"
 
     return msg
 
-# ===== إرسال الأسعار للقناة مع زر الإنستغرام =====
-async def send_prices_job(context: ContextTypes.DEFAULT_TYPE, opening=False, closing=False):
-    msg = format_message(opening=opening, closing=closing)
-    keyboard = [
-        [InlineKeyboardButton("تابع الإنستغرام", url="https://www.instagram.com/aged_ali40?igsh=Nm42ZXVybTlia3Z0&utm_source=qr")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(chat_id=CHAT_ID, text=msg, reply_markup=reply_markup)
+# إرسال الرسالة
+async def send_prices(opening=False, closing=False):
+    msg = format_message(opening, closing)
+    await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.HTML)
 
-# ===== جدولة الرسائل =====
-async def schedule_prices(app):
-    # إرسال أول رسالة عند الساعة 10 صباحًا (فتح البورصة)
-    app.job_queue.run_daily(lambda context: asyncio.create_task(send_prices_job(context, opening=True)),
-                            time=time(10,0,0), days=(0,1,2,3,4,5,6))
+# الجدولة اليومية
+async def scheduler():
+    while True:
+        now = datetime.now().time()
 
-    # إرسال باقي الرسائل كل ساعة من 11 صباحًا حتى 4 مساءً
-    for hour in range(11, 17):
-        app.job_queue.run_daily(lambda context: asyncio.create_task(send_prices_job(context)),
-                                time=time(hour,0,0), days=(0,1,2,3,4,5,6))
+        if now.hour == 10 and now.minute == 0:
+            await send_prices(opening=True)
+            await asyncio.sleep(60)
 
-    # إرسال آخر رسالة عند الساعة 5 مساءً (إغلاق البورصة)
-    app.job_queue.run_daily(lambda context: asyncio.create_task(send_prices_job(context, closing=True)),
-                            time=time(17,0,0), days=(0,1,2,3,4,5,6))
+        elif now.hour == 17 and now.minute == 0:
+            await send_prices(closing=True)
+            await asyncio.sleep(60)
 
-# ===== تشغيل البوت =====
+        await asyncio.sleep(30)
+
+# تشغيل البوت
 async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    # جدولة الرسائل
-    await schedule_prices(app)
-
-    # تشغيل البوت
-    await app.run_polling()
+    await scheduler()
 
 if __name__ == "__main__":
     asyncio.run(main())
