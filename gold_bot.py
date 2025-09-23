@@ -1,7 +1,7 @@
 import os
 import requests
 import asyncio
-from datetime import datetime, time
+from datetime import datetime
 from telegram import Bot
 from telegram.constants import ParseMode
 
@@ -25,11 +25,10 @@ def get_gold_prices():
     if "price" not in data:
         return None
 
-    price_per_ounce = data["price"]  # سعر الأونصة بالدولار
+    price_per_ounce = data["price"]
     price_per_gram = price_per_ounce / 31.1035
-    price_per_mithqal = price_per_gram * 5  # 1 مثقال = 5 غرام
+    price_per_mithqal = price_per_gram * 5
 
-    # أسعار العيارات (نسبة نقاء الذهب)
     karats = {
         "عيار 24": 1.0,
         "عيار 22": 22 / 24,
@@ -46,7 +45,7 @@ def get_gold_prices():
     return {"karats": prices, "ounce": round(price_per_ounce, 2)}
 
 # صياغة الرسالة
-def format_message(opening=False, closing=False):
+def format_message():
     prices_data = get_gold_prices()
     if not prices_data:
         return "❌ خطأ في جلب أسعار الذهب."
@@ -56,37 +55,27 @@ def format_message(opening=False, closing=False):
 
     today = datetime.now().strftime("%Y-%m-%d")
     msg = f"📅 {today}\n\n"
-
-    if opening:
-        msg += "✅ تم فتح بورصة العراق\n\n"
-    elif closing:
-        msg += "❌ تم إغلاق بورصة العراق\n\n"
-
-    msg += f"💰 أسعار الذهب:\n• الأونصة: {ounce_price}$\n\n"
+    msg += f"💰 أسعار الذهب الآن:\n• الأونصة: {ounce_price}$\n\n"
     for karat, (gram, mithqal) in prices.items():
         msg += f"{karat}:\n- للغرام: {gram}$\n- للمثقال: {mithqal}$\n\n"
 
     return msg
 
 # إرسال الرسالة
-async def send_prices(opening=False, closing=False):
-    msg = format_message(opening, closing)
+async def send_prices():
+    msg = format_message()
     await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.HTML)
 
 # الجدولة اليومية
 async def scheduler():
+    last_sent_hour = None
     while True:
-        now = datetime.now().time()
-
-        if now.hour == 10 and now.minute == 0:
-            await send_prices(opening=True)
-            await asyncio.sleep(60)
-
-        elif now.hour == 17 and now.minute == 0:
-            await send_prices(closing=True)
-            await asyncio.sleep(60)
-
-        await asyncio.sleep(30)
+        now = datetime.now()
+        if 10 <= now.hour <= 17:  # من 10 الصبح لحد 5 العصر
+            if now.minute == 0 and now.hour != last_sent_hour:
+                await send_prices()
+                last_sent_hour = now.hour
+        await asyncio.sleep(30)  # يفحص كل نصف دقيقة
 
 # تشغيل البوت
 async def main():
